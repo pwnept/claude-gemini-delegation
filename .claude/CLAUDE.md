@@ -1,58 +1,83 @@
-# Token Quota Mode
+# Claude Code Configuration
 
-**Budget: 19K tokens per 5hr | Remaining: [User updates]**
+## Enabled Delegation CLIs
 
-When quota exceeded = user cannot work. Preserve tokens for high-value reasoning.
+- **Gemini CLI**: Google's Gemini models via CLI
 
-## BANNED Commands (Delegate or Refuse)
+## Delegation Presets
 
-- `npm ls`, `pip list`, `git log >5 commits`
-- `find`, `grep -r` (any recursive search)
-- Reading 3+ new files
-- Security scans
-- Output >500 lines
+- **security_audit**: Routes to `gemini`
+  Pattern: `(security|vulnerability|audit|xss|sql injection|csrf)`
+- **web_search**: Routes to `gemini`
+  Pattern: `(search|documentation|lookup|find.*docs)`
+- **code_analysis**: Routes to `gemini`
+  Pattern: `(analyze|review|inspect).*code`
 
-**No exceptions.**
+## Quick Delegation
 
-## Quick Check
+Use the wrapper scripts for easy delegation:
 
-1. >500 lines output? → DELEGATE
-2. 3+ new files? → DELEGATE
-3. Banned command? → DELEGATE
-4. Security/audit? → DELEGATE
-5. Already in context? → Handle directly
-
-## Delegation Format
-
+**Unix/Mac:**
 ```bash
-PROMPT=$(python .claude/hooks/pre-delegate.py "CMD" "CONTEXT" LINES)
-gemini -p "$PROMPT"
+PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
+gemini --model gemini-3-flash -p "$PROMPT"
 ```
 
-## Examples
-
-```bash
-# Dependencies (banned)
-PROMPT=$(python .claude/hooks/pre-delegate.py "npm ls" "Build check" 8)
-gemini -p "$PROMPT"
-
-# Security scan (banned)
-PROMPT=$(python .claude/hooks/pre-delegate.py "grep -r password src/" "Audit" 6)
-gemini -p "$PROMPT"
+**Windows (PowerShell):**
+```powershell
+$prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
+gemini --model gemini-3-flash -p $prompt
 ```
 
-## Cost Math
+**Windows (CMD):**
+```cmd
+FOR /F "delims=" %i IN ('.claude\hooks\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
+gemini --model gemini-3-flash -p "%PROMPT%"
+```
 
-- Read 2K lines yourself: 2,000 tokens from quota
-- Delegate to Gemini: 150 tokens from quota
-- **Gemini has unlimited tokens. User has 19K. Use Gemini's.**
+## Delegation Workflow
 
-## Handle Directly Only:
+1. **Identify task type** - Security? Git ops? Analysis?
+2. **Check presets** - Is there a matching preset?
+3. **Use delegation hook** - Let the hook format the prompt
+4. **Execute with appropriate CLI** - Use the routed CLI
+5. **Validate response** - Check quality with post-delegate hook
 
-- Single-file edit (in context)
-- Architecture decision (no new data)
-- Clarification (<50 tokens)
+## Routing Examples
 
-## If You Break Rules
+### Security Audit
+```bash
+# Auto-routes to Gemini (if enabled)
+PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
+gemini --model gemini-3-flash -p "$PROMPT"
+```
 
-Executing banned commands = you failed. User loses tokens for complex work later.
+### Git Operations  
+```bash
+# Auto-routes to Aider (if enabled)
+PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")
+aider -p "$PROMPT"
+```
+
+### Code Analysis
+```bash
+# Routes based on configured preference
+PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
+gemini --model gemini-3-flash -p "$PROMPT"
+```
+
+## Weekly Maintenance
+
+```bash
+# Analyze delegation metrics
+python .claude/hooks/analyze_metrics.py
+
+# Review routing effectiveness
+# Update presets if needed
+```
+
+## Configuration
+
+To reconfigure delegation preferences, run the setup wizard again manually.
+
+This will let you enable/disable CLIs.

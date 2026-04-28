@@ -112,7 +112,7 @@ python3 "$SCRIPT_DIR/pre_delegate.py" "$@"
     wrapper_bat = hooks_dir / "delegate.bat"
     wrapper_bat.write_text("""@echo off
 REM Delegation wrapper script
-python "%~dp0pre_delegate.py" %*
+python3 "%~dp0pre_delegate.py" %*
 """)
     print_success("Created Windows wrapper: delegate.bat")
     
@@ -120,7 +120,7 @@ python "%~dp0pre_delegate.py" %*
     wrapper_ps1 = hooks_dir / "delegate.ps1"
     wrapper_ps1.write_text("""# Delegation wrapper script
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-python "$ScriptDir/pre_delegate.py" $args
+python3 "$ScriptDir/pre_delegate.py" $args
 """)
     print_success("Created PowerShell wrapper: delegate.ps1")
 
@@ -207,19 +207,19 @@ Use the wrapper scripts for easy delegation:
 **Unix/Mac:**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-gemini -p "$PROMPT"
+gemini --model gemini-3-flash -p "$PROMPT"
 ```
 
 **Windows (PowerShell):**
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
-gemini -p $prompt
+gemini --model gemini-3-flash -p $prompt
 ```
 
 **Windows (CMD):**
 ```cmd
 FOR /F "delims=" %i IN ('.claude\\hooks\\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
-gemini -p "%PROMPT%"
+gemini --model gemini-3-flash -p "%PROMPT%"
 ```
 
 ## Delegation Workflow
@@ -236,7 +236,7 @@ gemini -p "%PROMPT%"
 ```bash
 # Auto-routes to Gemini (if enabled)
 PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
-gemini -p "$PROMPT"
+gemini --model gemini-3-flash -p "$PROMPT"
 ```
 
 ### Git Operations  
@@ -250,14 +250,14 @@ aider -p "$PROMPT"
 ```bash
 # Routes based on configured preference
 PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
-gemini -p "$PROMPT"
+gemini --model gemini-3-flash -p "$PROMPT"
 ```
 
 ## Weekly Maintenance
 
 ```bash
 # Analyze delegation metrics
-python .claude/hooks/analyze_metrics.py
+python3 .claude/hooks/analyze_metrics.py
 
 # Review routing effectiveness
 # Update presets if needed
@@ -297,10 +297,10 @@ echo ""
 
 # 2. Execute with Gemini (or other CLI)
 echo "Executing with Gemini..."
-# gemini -p "$PROMPT"
+# gemini --model gemini-3-flash -p "$PROMPT"
 
 # 3. Validate response (after execution)
-# RESPONSE=$(gemini -p "$PROMPT")
+# RESPONSE=$(gemini --model gemini-3-flash -p "$PROMPT")
 # python ../.claude/hooks/post-delegate.py "$RESPONSE" 10 "build-analysis"
 """)
     
@@ -321,7 +321,7 @@ PROMPT=$(python ../.claude/hooks/pre-delegate.py \
   8)
 
 echo "Running security audit..."
-RESPONSE=$(gemini -p "$PROMPT")
+RESPONSE=$(gemini --model gemini-3-flash -p "$PROMPT")
 
 # Validate and save results
 python ../.claude/hooks/post-delegate.py "$RESPONSE" 8 "security-audit"
@@ -373,7 +373,7 @@ def show_next_steps(config: Dict):
     enabled_clis = config.get("cli_configs", {})
     
     print(f"{Colors.BOLD}1. Test the hooks:{Colors.END}")
-    print("   python .claude/hooks/pre_delegate.py \"test task\" \"test context\"")
+    print("   python3 .claude/hooks/pre_delegate.py \"test task\" \"test context\"")
     
     if enabled_clis:
         print(f"\n{Colors.BOLD}2. Try a delegation:{Colors.END}")
@@ -389,7 +389,7 @@ def show_next_steps(config: Dict):
     print("   Check .claude/examples/ for usage examples")
     
     print(f"\n{Colors.BOLD}5. Monitor metrics:{Colors.END}")
-    print("   python .claude/hooks/analyze_metrics.py")
+    print("   python3 .claude/hooks/analyze_metrics.py")
 
 
 def main():

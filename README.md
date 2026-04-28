@@ -34,35 +34,48 @@ Delegate token-heavy operations to Gemini CLI (generous free tier) while Claude 
 - **Claude Code** installed
 - **Gemini CLI:** `npm install -g @google/gemini-cli`
 
-### Installation (30 seconds)
+### Installation
 
+First, clone the repository to your machine:
 ```bash
-# 1. Clone repository
 git clone https://github.com/carlosduplar/claude-gemini-delegation.git
 cd claude-gemini-delegation
-
-# 2. Run interactive installer (recommended)
-python setup.py
-
-# The installer will:
-# - Detect installed AI CLIs (Gemini, Aider, etc.)
-# - Let you select which to enable
-# - Install delegation hooks
-# - Configure Claude Code settings
-# - Copy CLAUDE.md to your project
 ```
 
-**Or manual installation:**
-
+#### Option A: Install in Current Project
+Run the interactive installer from the root of the project you want to configure. By default, it installs into the current working directory:
 ```bash
-# Copy CLAUDE.md only (minimal setup)
+python3 setup.py
+```
+
+*(Note: If you want to use the automated setup in a different project, you can copy `setup.py`, `install.py`, and the `hooks/` folder to that project's root folder, then run `python3 setup.py` from there.)*
+
+#### Option B: Install Globally (Applies to all projects)
+If you want these delegation rules to apply to *every* project you open with Claude Code, you can install the configuration globally into your user directory.
+
+**Mac / Linux:**
+```bash
+mkdir -p ~/.claude
+cp .claude/CLAUDE.md ~/.claude/CLAUDE.md
+```
+
+**Windows (PowerShell):**
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\.claude"
+Copy-Item -Path ".claude\CLAUDE.md" -Destination "$HOME\.claude\CLAUDE.md"
+```
+
+#### Option C: Manual Installation (Minimal)
+You can also manually copy the rules file to any specific project:
+```bash
+# Mac / Linux
 cp .claude/CLAUDE.md /path/to/your/project/.claude/
 
-# Or for global rules (applies to all projects):
-cp .claude/CLAUDE.md ~/.claude/
+# Windows
+Copy-Item -Path ".claude\CLAUDE.md" -Destination "C:\path\to\your\project\.claude\CLAUDE.md"
 ```
 
-**Restart Claude Code after installation.**
+**Important: Always restart Claude Code after changing configuration files.**
 
 ---
 
@@ -91,12 +104,12 @@ See [Settings Explained](#settings-explained) for details on each setting.
 If you want automated prompt formatting:
 
 ```bash
-python setup_hooks.py
+python3 setup_hooks.py
 
 # Installs cross-platform hooks to .claude/hooks/:
-# - pre-delegate.py (prompt formatter)
-# - post-delegate.py (response validator)
-# - analyze-metrics.py (usage analyzer)
+# - pre_delegate.py (prompt formatter)
+# - post_delegate.py (response validator)
+# - analyze_metrics.py (usage analyzer)
 ```
 
 **Note:** Hooks are optional. CLAUDE.md alone provides 50-70% token savings.
@@ -153,8 +166,8 @@ Total cost: 2,000 tokens
 User: "Check npm dependencies"
 Claude: I'll delegate this to preserve your quota:
 
-PROMPT=$(python .claude/hooks/pre-delegate.py "npm ls" "Build analysis" 8)
-gemini -p "$PROMPT"
+PROMPT=$(python3 .claude/hooks/pre_delegate.py "npm ls" "Build analysis" 8)
+gemini --model gemini-3-flash -p "$PROMPT"
 
 [Gemini reads 1,847 lines, returns 150-token summary]
 Total cost: 150 tokens (92% savings!)
@@ -195,7 +208,7 @@ Total cost: 150 tokens (92% savings!)
 ### Option 1: Automated Setup (Recommended)
 
 ```bash
-python setup.py
+python3 setup.py
 
 # Interactive installer:
 # - Detects installed CLIs
@@ -222,7 +235,7 @@ cp .claude/CLAUDE.md ~/.claude/
 
 ```bash
 # Install delegation hooks for automation
-python setup_hooks.py
+python3 setup_hooks.py
 
 # Hooks provide:
 # - Automatic prompt formatting
@@ -287,7 +300,7 @@ User: "We're deploying tomorrow. Scan @src/ for hardcoded credentials and API ke
 Track your delegation effectiveness:
 
 ```bash
-python .claude/hooks/analyze-metrics.py
+python3 .claude/hooks/analyze_metrics.py
 
 # Expected output:
 # Delegation rate: 73%
@@ -362,7 +375,7 @@ cat .claude/settings.json
 # (not just /clear - full application restart)
 
 # 3. Re-run setup if needed
-python setup.py
+python3 setup.py
 ```
 
 ---
@@ -385,9 +398,9 @@ claude-gemini-delegation/
 │   ├── CLAUDE.md              # Core delegation rules
 │   └── settings.json.example  # Settings template
 ├── hooks/                      # Optional delegation hooks
-│   ├── pre-delegate.py
-│   ├── post-delegate.py
-│   └── analyze-metrics.py
+│   ├── pre_delegate.py
+│   ├── post_delegate.py
+│   └── analyze_metrics.py
 ├── examples/                   # Example configurations
 │   ├── minimal-CLAUDE.md
 │   └── security-focused-CLAUDE.md

@@ -107,11 +107,11 @@ Use Python hooks for cross-platform delegation:
 ```bash
 # Using wrapper script (Unix/Mac)
 PROMPT=$(./claude/hooks/delegate "npm ls" "Investigating build slowdown")
-gemini -p "$PROMPT"
+gemini --model gemini-3-flash -p "$PROMPT"
 
 # Using Python directly (all platforms)
 PROMPT=$(python .claude/hooks/pre-delegate.py "npm ls" "Investigating build slowdown")
-gemini -p "$PROMPT"
+gemini --model gemini-3-flash -p "$PROMPT"
 
 # Validate response
 python .claude/hooks/post-delegate.py "$RESPONSE" 10 "dependency-analysis"
@@ -124,11 +124,11 @@ Use the batch or PowerShell wrappers:
 ```powershell
 # PowerShell
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build investigation"
-gemini -p $prompt
+gemini --model gemini-3-flash -p $prompt
 
 # Command Prompt
 FOR /F "delims=" %i IN ('.claude\\hooks\\delegate.bat "npm ls" "Build investigation"') DO SET PROMPT=%i
-gemini -p "%PROMPT%"
+gemini --model gemini-3-flash -p "%PROMPT%"
 ```
 
 ## Core Principles
@@ -260,7 +260,7 @@ def print_next_steps(claude_dir: Path, is_user_install: bool):
         test_cmd = './.claude/hooks/delegate "git status" "Test delegation"'
     
     print(f'   PROMPT=$({test_cmd})')
-    print('   gemini -p "$PROMPT"')
+    print('   gemini --model gemini-3-flash -p "$PROMPT"')
     
     print("\n📚 Documentation:")
     print(f"   {claude_dir / 'hooks' / 'README.md'}")
