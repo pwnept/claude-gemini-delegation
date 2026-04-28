@@ -38,16 +38,16 @@ def print_header(text: str):
     print(f"{'=' * 60}{Colors.END}\n")
 
 def print_success(text: str):
-    print(f"{Colors.GREEN}✓ {text}{Colors.END}")
+    print(f"{Colors.GREEN}[SUCCESS] {text}{Colors.END}")
 
 def print_error(text: str):
-    print(f"{Colors.RED}✗ {text}{Colors.END}")
+    print(f"{Colors.RED}[ERROR] {text}{Colors.END}")
 
 def print_warning(text: str):
-    print(f"{Colors.YELLOW}⚠ {text}{Colors.END}")
+    print(f"{Colors.YELLOW}[WARNING] {text}{Colors.END}")
 
 def print_info(text: str):
-    print(f"{Colors.BLUE}ℹ {text}{Colors.END}")
+    print(f"{Colors.BLUE}[INFO] {text}{Colors.END}")
 
 # Assume hook templates are in same directory as installer
 SCRIPT_DIR = Path(__file__).parent
@@ -56,12 +56,12 @@ HOOKS_SOURCE = SCRIPT_DIR / "hooks"
 
 def copy_hook_files(dest_dir: Path):
     """Copy hook scripts to destination directory."""
-    print_header("📄 Installing Hook Scripts")
+    print_header("Installing Hook Scripts")
     
     hooks_to_copy = [
-        "pre-delegate.py",
-        "post-delegate.py",
-        "analyze-metrics.py"
+        "pre_delegate.py",
+        "post_delegate.py",
+        "analyze_metrics.py"
     ]
     
     copied_count = 0
@@ -95,15 +95,15 @@ def create_wrapper_scripts(hooks_dir: Path, platform: str = None):
     if platform is None:
         platform = "windows" if os.name == 'nt' else "unix"
     
-    print_header("🔧 Creating Wrapper Scripts")
+    print_header("Creating Wrapper Scripts")
     
     if platform == "unix":
         # Bash wrapper
         wrapper = hooks_dir / "delegate"
-        wrapper.write_text("""#!/bin/bash
+        wrapper.write_text(f"""#!/bin/bash
 # Delegation wrapper script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "$SCRIPT_DIR/pre-delegate.py" "$@"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+python3 "$SCRIPT_DIR/pre_delegate.py" "$@"
 """)
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         print_success("Created Unix wrapper: delegate")
@@ -112,7 +112,7 @@ python3 "$SCRIPT_DIR/pre-delegate.py" "$@"
     wrapper_bat = hooks_dir / "delegate.bat"
     wrapper_bat.write_text("""@echo off
 REM Delegation wrapper script
-python "%~dp0pre-delegate.py" %*
+python "%~dp0pre_delegate.py" %*
 """)
     print_success("Created Windows wrapper: delegate.bat")
     
@@ -120,7 +120,7 @@ python "%~dp0pre-delegate.py" %*
     wrapper_ps1 = hooks_dir / "delegate.ps1"
     wrapper_ps1.write_text("""# Delegation wrapper script
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-python "$ScriptDir/pre-delegate.py" $args
+python "$ScriptDir/pre_delegate.py" $args
 """)
     print_success("Created PowerShell wrapper: delegate.ps1")
 
@@ -177,7 +177,7 @@ def create_enhanced_claude_md(config: Dict, presets: Dict, base_dir: Path):
 
 ## Delegation Status
 
-No external CLIs configured. Run `python install.py` to enable delegation.
+No external CLIs configured. Run `python setup.py` to enable delegation.
 """
     else:
         cli_list = "\n".join([
@@ -257,7 +257,7 @@ gemini -p "$PROMPT"
 
 ```bash
 # Analyze delegation metrics
-python .claude/hooks/analyze-metrics.py
+python .claude/hooks/analyze_metrics.py
 
 # Review routing effectiveness
 # Update presets if needed
@@ -265,12 +265,9 @@ python .claude/hooks/analyze-metrics.py
 
 ## Configuration
 
-To reconfigure delegation preferences:
-```bash
-python install.py
-```
+To reconfigure delegation preferences, run the setup wizard again manually.
 
-This will re-run the setup wizard and let you enable/disable CLIs.
+This will let you enable/disable CLIs.
 """
     
     claude_md.write_text(content)
@@ -279,7 +276,7 @@ This will re-run the setup wizard and let you enable/disable CLIs.
 
 def create_usage_examples(config: Dict, base_dir: Path):
     """Create example scripts showing delegation usage."""
-    print_header("📚 Creating Usage Examples")
+    print_header("Creating Usage Examples")
     
     examples_dir = base_dir / "examples"
     examples_dir.mkdir(exist_ok=True)
@@ -341,12 +338,12 @@ echo "Results saved to security-audit-results.txt"
 
 def verify_installation(base_dir: Path, config: Dict) -> bool:
     """Verify that installation was successful."""
-    print_header("✓ Verifying Installation")
+    print_header("Verifying Installation")
     
     checks = [
-        (base_dir / "hooks" / "pre-delegate.py", "Pre-delegation hook"),
-        (base_dir / "hooks" / "post-delegate.py", "Post-delegation hook"),
-        (base_dir / "hooks" / "analyze-metrics.py", "Metrics analyzer"),
+        (base_dir / "hooks" / "pre_delegate.py", "Pre-delegation hook"),
+        (base_dir / "hooks" / "post_delegate.py", "Post-delegation hook"),
+        (base_dir / "hooks" / "analyze_metrics.py", "Metrics analyzer"),
         (base_dir / "delegation_config.json", "Configuration file"),
         (base_dir / "CLAUDE.md", "Claude configuration"),
     ]
@@ -371,12 +368,12 @@ def verify_installation(base_dir: Path, config: Dict) -> bool:
 
 def show_next_steps(config: Dict):
     """Show user what to do next."""
-    print_header("🎯 Next Steps")
+    print_header("Next Steps")
     
     enabled_clis = config.get("cli_configs", {})
     
     print(f"{Colors.BOLD}1. Test the hooks:{Colors.END}")
-    print("   python .claude/hooks/pre-delegate.py \"test task\" \"test context\"")
+    print("   python .claude/hooks/pre_delegate.py \"test task\" \"test context\"")
     
     if enabled_clis:
         print(f"\n{Colors.BOLD}2. Try a delegation:{Colors.END}")
@@ -392,7 +389,7 @@ def show_next_steps(config: Dict):
     print("   Check .claude/examples/ for usage examples")
     
     print(f"\n{Colors.BOLD}5. Monitor metrics:{Colors.END}")
-    print("   python .claude/hooks/analyze-metrics.py")
+    print("   python .claude/hooks/analyze_metrics.py")
 
 
 def main():
@@ -408,7 +405,7 @@ def main():
         install_not_found_clis
     )
     
-    print_header("🚀 Claude-Gemini Delegation Enhanced Setup")
+    print_header("Claude-Gemini Delegation Enhanced Setup")
     
     # Check Python version
     if not check_python_version():
@@ -464,7 +461,7 @@ def main():
     # Offer to install missing CLIs
     install_not_found_clis(configured)
     
-    print_header("✅ Installation Complete!")
+    print_header("Installation Complete!")
     print(f"\n{Colors.GREEN}{Colors.BOLD}Your delegation setup is ready!{Colors.END}\n")
 
 
