@@ -48,6 +48,13 @@ Run the interactive installer from the root of the project you want to configure
 python3 setup.py
 ```
 
+The default installer enables only Gemini CLI, even if other supported CLIs are installed. Enable extra CLIs explicitly when you want them:
+```bash
+python3 setup.py --enable-cli aider
+python3 setup.py --enable-cli copilot
+python3 setup.py --all-clis
+```
+
 *(Note: If you want to use the automated setup in a different project, you can copy `setup.py`, `install.py`, and the `hooks/` folder to that project's root folder, then run `python3 setup.py` from there.)*
 
 #### Option B: Install Globally (Applies to all projects)
@@ -212,6 +219,7 @@ python3 setup.py
 
 # Interactive installer:
 # - Detects installed CLIs
+# - Enables Gemini by default; extra CLIs require --enable-cli or --all-clis
 # - Configures settings.json
 # - Installs CLAUDE.md
 # - Optional: delegation hooks

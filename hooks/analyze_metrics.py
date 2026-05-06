@@ -3,30 +3,39 @@
 Analyze delegation metrics to identify optimization opportunities
 
 Usage:
-    python analyze-metrics.py [--days N]
+    python analyze_metrics.py [--days N]
     
 Options:
     --days N    Analyze metrics from the last N days (default: 7)
 """ 
 
 import sys
+import csv
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-def parse_csv_line(line: str) -> Tuple[str, str, int, int]:
+def parse_csv_row(row: list) -> Optional[Tuple[str, str, int, int]]:
     """Parse a single CSV line into components."""
-    parts = line.strip().split(',')
-    if len(parts) != 4:
+    if len(row) != 4:
         return None
     
-    timestamp, task, lines, tokens = parts
+    timestamp, task, lines, tokens = row
     try:
         return timestamp, task, int(lines), int(tokens)
     except ValueError:
         return None
+
+
+def parse_csv_line(line: str) -> Optional[Tuple[str, str, int, int]]:
+    """Parse a legacy CSV line string for callers importing the old helper."""
+    return parse_csv_row(next(csv.reader([line])))
 
 
 def load_metrics(metrics_dir: Path, days: int) -> List[Tuple[str, str, int, int]]:
@@ -40,12 +49,12 @@ def load_metrics(metrics_dir: Path, days: int) -> List[Tuple[str, str, int, int]
         if not log_file.exists():
             continue
         
-        with log_file.open('r') as f:
-            # Skip header
-            next(f, None)
-            
-            for line in f:
-                parsed = parse_csv_line(line)
+        with log_file.open('r', encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+
+            for row in reader:
+                parsed = parse_csv_row(row)
                 if parsed:
                     metrics.append(parsed)
     
@@ -56,7 +65,7 @@ def analyze_metrics(metrics: List[Tuple[str, str, int, int]]):
     """Analyze and display metrics."""
     if not metrics:
         print("📊 No delegation metrics found")
-        print("Make sure you're running delegations with the post-delegate hook")
+        print("Make sure you're running delegations with the post-delegation hook")
         return
     
     # Calculate aggregates

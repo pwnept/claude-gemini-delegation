@@ -4,17 +4,22 @@ Post-delegation hook for Claude Code -> Gemini delegation
 Validates Gemini's response quality and logs metrics
 
 Usage:
-    python post-delegate.py <response> [max_lines] [task_context]
+    python post_delegate.py <response> [max_lines] [task_context]
     
 Example:
-    python post-delegate.py "Response text here" 10 "dependency-analysis"
+    python post_delegate.py "Response text here" 10 "dependency-analysis"
 """ 
 
 import sys
 import re
+import csv
 from datetime import datetime
 from pathlib import Path
 from typing import Tuple
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def count_lines(text: str) -> int:
@@ -71,11 +76,13 @@ def log_metrics(task: str, lines: int, tokens: int, metrics_dir: Path):
     
     # Create header if file doesn't exist
     if not log_file.exists():
-        log_file.write_text("timestamp,task,lines,tokens\n")
+        with log_file.open('w', encoding="utf-8", newline="") as f:
+            f.write("timestamp,task,lines,tokens\n")
     
     # Append metrics
-    with log_file.open('a') as f:
-        f.write(f"{timestamp},{task},{lines},{tokens}\n")
+    with log_file.open('a', encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([timestamp, task, lines, tokens])
 
 
 def extract_action_items(response: str) -> list:
@@ -105,7 +112,7 @@ def check_daily_usage(metrics_dir: Path) -> int:
     if not log_file.exists():
         return 0
     
-    with log_file.open('r') as f:
+    with log_file.open('r', encoding="utf-8", newline="") as f:
         # Subtract 1 for header row
         return max(0, len(f.readlines()) - 1)
 
@@ -161,7 +168,7 @@ def main():
     daily_count = check_daily_usage(metrics_dir)
     if daily_count >= 20:
         print(f"\n💡 TIP: You've made {daily_count} delegations today.")
-        print("   Run 'python .claude/hooks/analyze-metrics.py' to see optimization opportunities")
+        print("   Run 'python .claude/hooks/analyze_metrics.py' to see optimization opportunities")
     
     # Exit with appropriate code
     sys.exit(0 if is_valid else 1)

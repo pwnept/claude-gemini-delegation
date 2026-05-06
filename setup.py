@@ -14,10 +14,10 @@ Usage:
 import os
 import sys
 import json
-import subprocess
 import shutil
+import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict
 import stat
 
 # Import the basic installer classes
@@ -97,31 +97,32 @@ def create_wrapper_scripts(hooks_dir: Path, platform: str = None):
     
     print_header("Creating Wrapper Scripts")
     
-    if platform == "unix":
-        # Bash wrapper
-        wrapper = hooks_dir / "delegate"
-        wrapper.write_text(f"""#!/bin/bash
+    # Bash wrapper. Create it on every platform so projects copied between
+    # Windows, WSL, macOS, and Linux keep a complete hook set.
+    wrapper = hooks_dir / "delegate"
+    wrapper.write_text("""#!/bin/bash
 # Delegation wrapper script
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 "$SCRIPT_DIR/pre_delegate.py" "$@"
-""")
+""", encoding="utf-8")
+    if platform == "unix":
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        print_success("Created Unix wrapper: delegate")
+    print_success("Created Unix wrapper: delegate")
     
     # Windows batch
     wrapper_bat = hooks_dir / "delegate.bat"
     wrapper_bat.write_text("""@echo off
 REM Delegation wrapper script
-python3 "%~dp0pre_delegate.py" %*
-""")
+python "%~dp0pre_delegate.py" %*
+""", encoding="utf-8")
     print_success("Created Windows wrapper: delegate.bat")
     
     # PowerShell wrapper
     wrapper_ps1 = hooks_dir / "delegate.ps1"
     wrapper_ps1.write_text("""# Delegation wrapper script
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-python3 "$ScriptDir/pre_delegate.py" $args
-""")
+python "$ScriptDir/pre_delegate.py" $args
+""", encoding="utf-8")
     print_success("Created PowerShell wrapper: delegate.ps1")
 
 
@@ -189,6 +190,17 @@ No external CLIs configured. Run `python setup.py` to enable delegation.
             f"- **{name}**: Routes to `{p['cli']}`\n  Pattern: `{p['pattern']}`"
             for name, p in presets.items()
         ])
+
+        git_operations_example = ""
+        if "git_operations" in presets:
+            git_operations_example = """
+### Git Operations
+```bash
+# Auto-routes to Aider (if enabled)
+PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")
+aider -p "$PROMPT"
+```
+"""
         
         content = f"""# Claude Code Configuration
 
@@ -228,7 +240,7 @@ gemini --model gemini-3-flash -p "%PROMPT%"
 2. **Check presets** - Is there a matching preset?
 3. **Use delegation hook** - Let the hook format the prompt
 4. **Execute with appropriate CLI** - Use the routed CLI
-5. **Validate response** - Check quality with post-delegate hook
+5. **Validate response** - Check quality with the post-delegation hook
 
 ## Routing Examples
 
@@ -239,13 +251,7 @@ PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy
 gemini --model gemini-3-flash -p "$PROMPT"
 ```
 
-### Git Operations  
-```bash
-# Auto-routes to Aider (if enabled)
-PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")
-aider -p "$PROMPT"
-```
-
+{git_operations_example}
 ### Code Analysis
 ```bash
 # Routes based on configured preference
@@ -270,7 +276,7 @@ To reconfigure delegation preferences, run the setup wizard again manually.
 This will let you enable/disable CLIs.
 """
     
-    claude_md.write_text(content)
+    claude_md.write_text(content, encoding="utf-8")
     print_success(f"Created enhanced CLAUDE.md")
 
 
@@ -287,7 +293,7 @@ def create_usage_examples(config: Dict, base_dir: Path):
 # Basic delegation example
 
 # 1. Generate optimized prompt
-PROMPT=$(python ../.claude/hooks/pre-delegate.py \
+PROMPT=$(python ../.claude/hooks/pre_delegate.py \
   "npm ls --depth=0" \
   "Investigating build performance")
 
@@ -301,8 +307,8 @@ echo "Executing with Gemini..."
 
 # 3. Validate response (after execution)
 # RESPONSE=$(gemini --model gemini-3-flash -p "$PROMPT")
-# python ../.claude/hooks/post-delegate.py "$RESPONSE" 10 "build-analysis"
-""")
+# python ../.claude/hooks/post_delegate.py "$RESPONSE" 10 "build-analysis"
+""", encoding="utf-8")
     
     if os.name != 'nt':
         basic_example.chmod(basic_example.stat().st_mode | stat.S_IXUSR)
@@ -315,7 +321,7 @@ echo "Executing with Gemini..."
 # Security audit example - delegates to Gemini
 
 # Run security scan on source files
-PROMPT=$(python ../.claude/hooks/pre-delegate.py \
+PROMPT=$(python ../.claude/hooks/pre_delegate.py \
   "grep -r 'password' src/ && grep -r 'api.*key' src/" \
   "Pre-deployment security audit" \
   8)
@@ -324,11 +330,11 @@ echo "Running security audit..."
 RESPONSE=$(gemini --model gemini-3-flash -p "$PROMPT")
 
 # Validate and save results
-python ../.claude/hooks/post-delegate.py "$RESPONSE" 8 "security-audit"
+python ../.claude/hooks/post_delegate.py "$RESPONSE" 8 "security-audit"
 
 echo "$RESPONSE" > security-audit-results.txt
 echo "Results saved to security-audit-results.txt"
-""")
+""", encoding="utf-8")
     
     if os.name != 'nt':
         advanced_example.chmod(advanced_example.stat().st_mode | stat.S_IXUSR)
@@ -373,14 +379,27 @@ def show_next_steps(config: Dict):
     enabled_clis = config.get("cli_configs", {})
     
     print(f"{Colors.BOLD}1. Test the hooks:{Colors.END}")
-    print("   python3 .claude/hooks/pre_delegate.py \"test task\" \"test context\"")
+    if os.name == "nt":
+        print("   python .claude\\hooks\\pre_delegate.py \"test task\" \"test context\"")
+    else:
+        print("   python3 .claude/hooks/pre_delegate.py \"test task\" \"test context\"")
     
     if enabled_clis:
         print(f"\n{Colors.BOLD}2. Try a delegation:{Colors.END}")
         first_cli = list(enabled_clis.keys())[0]
         first_cli_cmd = enabled_clis[first_cli]["command"]
-        print(f"   PROMPT=$(./.claude/hooks/delegate \"npm ls\" \"Test\")")
-        print(f"   {first_cli_cmd} -p \"$PROMPT\"")
+        if os.name == "nt":
+            print("   $prompt = & .claude\\hooks\\delegate.ps1 \"npm ls\" \"Test\"")
+            if first_cli == "gemini":
+                print("   gemini --model gemini-3-flash -p $prompt")
+            else:
+                print(f"   # Send $prompt to {first_cli_cmd} using that CLI's prompt option")
+        else:
+            print(f"   PROMPT=$(./.claude/hooks/delegate \"npm ls\" \"Test\")")
+            if first_cli == "gemini":
+                print(f"   {first_cli_cmd} --model gemini-3-flash -p \"$PROMPT\"")
+            else:
+                print(f"   # Send \"$PROMPT\" to {first_cli_cmd} using that CLI's prompt option")
     
     print(f"\n{Colors.BOLD}3. Restart Claude Code{Colors.END}")
     print("   Your delegation configuration will be active")
@@ -389,7 +408,10 @@ def show_next_steps(config: Dict):
     print("   Check .claude/examples/ for usage examples")
     
     print(f"\n{Colors.BOLD}5. Monitor metrics:{Colors.END}")
-    print("   python3 .claude/hooks/analyze_metrics.py")
+    if os.name == "nt":
+        print("   python .claude\\hooks\\analyze_metrics.py")
+    else:
+        print("   python3 .claude/hooks/analyze_metrics.py")
 
 
 def main():
@@ -404,6 +426,23 @@ def main():
         save_config,
         install_not_found_clis
     )
+
+    parser = argparse.ArgumentParser(
+        description="Install Claude-Gemini delegation hooks and routing rules."
+    )
+    parser.add_argument(
+        "--enable-cli",
+        action="append",
+        choices=("gemini", "aider", "copilot", "gpt-me"),
+        dest="enabled_clis",
+        help="Enable an additional delegation CLI. Repeat for multiple CLIs. Default: gemini only.",
+    )
+    parser.add_argument(
+        "--all-clis",
+        action="store_true",
+        help="Enable every supported CLI that is installed.",
+    )
+    args = parser.parse_args()
     
     print_header("Claude-Gemini Delegation Enhanced Setup")
     
@@ -418,8 +457,13 @@ def main():
     # Discover CLIs
     discovered = discover_clis()
     
-    # Interactive selection
-    configured = interactive_selection(discovered)
+    # CLI selection. Default is Gemini only; other CLIs require explicit flags.
+    enabled_cli_names = ["gemini"] + (args.enabled_clis or [])
+    configured = interactive_selection(
+        discovered,
+        enabled_cli_names=enabled_cli_names,
+        enable_all=args.all_clis,
+    )
     
     # Setup hooks directory
     setup_hooks(base_dir)

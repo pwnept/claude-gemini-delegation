@@ -18,8 +18,16 @@ Options:
 import sys
 import os
 import stat
+import shutil
 from pathlib import Path
 import platform
+
+SCRIPT_DIR = Path(__file__).parent
+HOOKS_SOURCE = SCRIPT_DIR / "hooks"
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def check_python_version():
@@ -62,8 +70,8 @@ def create_wrapper_scripts(hooks_dir: Path):
 # Usage: ./delegate <task> [context] [max_lines]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "$SCRIPT_DIR/pre-delegate.py" "$@"
-""")
+python3 "$SCRIPT_DIR/pre_delegate.py" "$@"
+""", encoding="utf-8")
     make_executable(unix_wrapper)
     
     # Windows wrapper (batch)
@@ -72,8 +80,8 @@ python3 "$SCRIPT_DIR/pre-delegate.py" "$@"
 REM Wrapper script for delegation hooks
 REM Usage: delegate.bat <task> [context] [max_lines]
 
-python "%~dp0pre-delegate.py" %*
-""")
+python "%~dp0pre_delegate.py" %*
+""", encoding="utf-8")
     
     # PowerShell wrapper
     ps_wrapper = hooks_dir / "delegate.ps1"
@@ -81,13 +89,39 @@ python "%~dp0pre-delegate.py" %*
 # Usage: ./delegate.ps1 <task> [context] [max_lines]
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-python "$ScriptDir/pre-delegate.py" $args
-""")
+python "$ScriptDir/pre_delegate.py" $args
+""", encoding="utf-8")
     
     print("✅ Created wrapper scripts:")
     print(f"   • delegate (Unix)")
     print(f"   • delegate.bat (Windows)")
     print(f"   • delegate.ps1 (PowerShell)")
+
+
+def copy_hook_files(hooks_dir: Path):
+    """Copy the actual hook scripts next to the wrappers."""
+    hooks_to_copy = [
+        "pre_delegate.py",
+        "post_delegate.py",
+        "analyze_metrics.py",
+    ]
+
+    copied_count = 0
+    for hook_file in hooks_to_copy:
+        source = HOOKS_SOURCE / hook_file
+        dest = hooks_dir / hook_file
+        if not source.exists():
+            print(f"⚠️  {hook_file} not found in source, skipping")
+            continue
+
+        shutil.copy2(source, dest)
+        make_executable(dest)
+        copied_count += 1
+        print(f"✅ Installed {hook_file}")
+
+    if copied_count != len(hooks_to_copy):
+        print("❌ Error: one or more hook scripts were missing")
+        sys.exit(1)
 
 
 def create_sample_claude_md(claude_dir: Path):
@@ -106,15 +140,15 @@ Use Python hooks for cross-platform delegation:
 
 ```bash
 # Using wrapper script (Unix/Mac)
-PROMPT=$(./claude/hooks/delegate "npm ls" "Investigating build slowdown")
+PROMPT=$(./.claude/hooks/delegate "npm ls" "Investigating build slowdown")
 gemini --model gemini-3-flash -p "$PROMPT"
 
 # Using Python directly (all platforms)
-PROMPT=$(python .claude/hooks/pre-delegate.py "npm ls" "Investigating build slowdown")
+PROMPT=$(python .claude/hooks/pre_delegate.py "npm ls" "Investigating build slowdown")
 gemini --model gemini-3-flash -p "$PROMPT"
 
 # Validate response
-python .claude/hooks/post-delegate.py "$RESPONSE" 10 "dependency-analysis"
+python .claude/hooks/post_delegate.py "$RESPONSE" 10 "dependency-analysis"
 ```
 
 ## Windows Users
@@ -138,7 +172,7 @@ gemini --model gemini-3-flash -p "%PROMPT%"
 - **Hook-driven automation**: Use local scripts, not subagents
 """
     
-    claude_md.write_text(sample_content)
+    claude_md.write_text(sample_content, encoding="utf-8")
     print(f"✅ Created sample CLAUDE.md")
 
 
@@ -156,23 +190,23 @@ Cross-platform Python hooks for Claude Code -> Gemini delegation.
 
 ```bash
 # Unix/Mac/Linux
-python pre-delegate.py "npm ls" "Debugging build" 8
+python pre_delegate.py "npm ls" "Debugging build" 8
 
 # Windows (same command)
-python pre-delegate.py "npm ls" "Debugging build" 8
+python pre_delegate.py "npm ls" "Debugging build" 8
 ```
 
 ### Post-delegation (validate responses)
 
 ```bash
-python post-delegate.py "Response text..." 10 "task-name"
+python post_delegate.py "Response text..." 10 "task-name"
 ```
 
 ### Analyze metrics
 
 ```bash
-python analyze-metrics.py
-python analyze-metrics.py --days 14  # Last 14 days
+python analyze_metrics.py
+python analyze_metrics.py --days 14  # Last 14 days
 ```
 
 ## Wrapper Scripts
@@ -206,7 +240,7 @@ All scripts use standard library only and work identically across:
 - Linux (bash, zsh, fish)
 """
     
-    readme.write_text(content)
+    readme.write_text(content, encoding="utf-8")
     print(f"✅ Created README.md in hooks directory")
 
 
@@ -217,10 +251,10 @@ def create_gitignore(claude_dir: Path):
     if gitignore.exists():
         content = gitignore.read_text()
         if "metrics/" not in content:
-            gitignore.write_text(content + "\n# Delegation metrics\nmetrics/\n")
+            gitignore.write_text(content + "\n# Delegation metrics\nmetrics/\n", encoding="utf-8")
             print("✅ Updated .gitignore")
     else:
-        gitignore.write_text("# Delegation metrics\nmetrics/\n")
+        gitignore.write_text("# Delegation metrics\nmetrics/\n", encoding="utf-8")
         print("✅ Created .gitignore")
 
 
@@ -246,7 +280,7 @@ def print_next_steps(claude_dir: Path, is_user_install: bool):
     
     if platform.system() == 'Windows':
         print(f'   cd {claude_dir / "hooks"}')
-        print('   python pre-delegate.py "npm ls" "Test" 5')
+        print('   python pre_delegate.py "npm ls" "Test" 5')
     else:
         print(f'   cd {claude_dir / "hooks"}')
         print('./delegate "npm ls" "Test" 5')
@@ -255,12 +289,16 @@ def print_next_steps(claude_dir: Path, is_user_install: bool):
     print("   Edit your CLAUDE.md to reference the hooks")
     
     print("\n4. Run a test delegation:")
-    test_cmd = 'python .claude/hooks/pre-delegate.py "git status" "Test delegation"'
+    test_cmd = 'python .claude/hooks/pre_delegate.py "git status" "Test delegation"'
     if platform.system() != 'Windows':
         test_cmd = './.claude/hooks/delegate "git status" "Test delegation"'
     
-    print(f'   PROMPT=$({test_cmd})')
-    print('   gemini --model gemini-3-flash -p "$PROMPT"')
+    if platform.system() == 'Windows':
+        print(f'   $prompt = & {test_cmd}')
+        print('   gemini --model gemini-3-flash -p $prompt')
+    else:
+        print(f'   PROMPT=$({test_cmd})')
+        print('   gemini --model gemini-3-flash -p "$PROMPT"')
     
     print("\n📚 Documentation:")
     print(f"   {claude_dir / 'hooks' / 'README.md'}")
@@ -269,7 +307,7 @@ def print_next_steps(claude_dir: Path, is_user_install: bool):
     print("   • Hooks work identically on Windows, Mac, and Linux")
     print("   • No dependencies needed beyond Python 3.6+")
     print("   • Metrics are auto-logged in .claude/metrics/")
-    print("   • Run analyze-metrics.py weekly to optimize prompts")
+    print("   • Run analyze_metrics.py weekly to optimize prompts")
 
 
 def main():
@@ -298,6 +336,7 @@ def main():
     # Create wrapper scripts
     hooks_dir = base_dir / "hooks"
     create_wrapper_scripts(hooks_dir)
+    copy_hook_files(hooks_dir)
     
     # Create documentation
     create_sample_claude_md(base_dir)
@@ -306,7 +345,7 @@ def main():
     
     # Make Python scripts executable on Unix
     if platform.system() != 'Windows':
-        for script in ['pre-delegate.py', 'post-delegate.py', 'analyze-metrics.py']:
+        for script in ['pre_delegate.py', 'post_delegate.py', 'analyze_metrics.py']:
             script_path = hooks_dir / script
             if script_path.exists():
                 make_executable(script_path)

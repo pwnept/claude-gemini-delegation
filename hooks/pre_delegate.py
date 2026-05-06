@@ -5,30 +5,29 @@ Automatically formats and optimizes delegation prompts
 Zero token cost - runs locally before Claude sees anything
 
 Usage:
-    python pre-delegate.py <task> [context] [max_lines]
+    python pre_delegate.py <task> [context] [max_lines]
     
 Example:
-    python pre-delegate.py "npm ls" "Debugging slow build" 8
+    python pre_delegate.py "npm ls" "Debugging slow build" 8
 """ 
 
 import sys
 import re
-from typing import Literal
 
-TaskType = Literal["shell", "search", "analyze", "docs", "generic"]
+TaskType = str
 
 
 def detect_task_type(task: str) -> TaskType:
     """Detect task type from task description."""
     task_lower = task.lower()
     
-    # Shell commands
-    if re.search(r'^(git|npm|pip|ls|grep|find|cat|echo|curl|wget)\s', task_lower):
-        return "shell"
-    
     # Search operations
-    if re.search(r'(search|find.*file|grep.*code|locate)', task_lower):
+    if re.search(r'^(grep|find)\s|(?:search|find.*file|grep.*code|locate)', task_lower):
         return "search"
+
+    # Shell commands
+    if re.search(r'^(git|npm|pip|ls|cat|echo|curl|wget)\s', task_lower):
+        return "shell"
     
     # Analysis tasks
     if re.search(r'(analyze|review|audit|check|inspect|investigate)', task_lower):

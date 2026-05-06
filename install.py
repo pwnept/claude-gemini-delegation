@@ -4,7 +4,10 @@ import sys
 import os
 import shutil
 import json
+import subprocess
 from pathlib import Path
+
+SUPPORTED_CLIS = ("gemini", "aider", "copilot", "gpt-me")
 
 def check_python_version():
     """Ensure Python 3.6+ is installed."""
@@ -25,32 +28,61 @@ def discover_clis():
     
     discovered = {}
     for key, info in clis.items():
-        cmd = info["command"].split()[0]
-        if shutil.which(cmd):
-            discovered[key] = info
-            discovered[key]["installed"] = True
-        else:
-            discovered[key] = info
-            discovered[key]["installed"] = False
+        discovered[key] = dict(info)
+        discovered[key]["installed"] = command_available(info["command"])
             
     return discovered
 
-def interactive_selection(discovered):
-    """Interactively select which CLIs to enable."""
+
+def command_available(command):
+    """Return True when a CLI command is available without invoking model APIs."""
+    parts = command.split()
+    if not parts or not shutil.which(parts[0]):
+        return False
+
+    if len(parts) == 1:
+        return True
+
+    try:
+        result = subprocess.run(
+            parts + ["--help"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    return result.returncode == 0
+
+def interactive_selection(discovered, enabled_cli_names=None, enable_all=False):
+    """Select which CLIs to enable.
+
+    By default, only Gemini is enabled. Additional CLIs are opt-in via setup.py
+    flags so a machine with gh/aider installed does not silently change routing.
+    """
     print("\n\033[1m--- CLI Selection ---\033[0m")
     selected = {}
-    
-    # In a non-interactive environment or for simplicity, 
-    # we'll enable all that are installed by default
-    # But for a real installer, we'd prompt.
-    # Since we're fixing a loop, let's just use what's found.
-    
+
+    if enable_all:
+        requested = set(SUPPORTED_CLIS)
+    else:
+        requested = set(enabled_cli_names or ("gemini",))
+
     for key, info in discovered.items():
         status = "\033[92m[Found]\033[0m" if info["installed"] else "\033[93m[Not Found]\033[0m"
         print(f"{status} {info['name']}: {info['description']}")
-        if info["installed"]:
+        if info["installed"] and key in requested:
             selected[key] = info
-            
+
+    missing_requested = sorted(
+        key for key in requested
+        if key in discovered and not discovered[key]["installed"]
+    )
+    for key in missing_requested:
+        print(f"\033[93m[Skipped]\033[0m {discovered[key]['name']} requested but not found")
+
     if not selected:
         print("\033[91mNo supported CLIs found.\033[0m")
         # We'll still return an empty dict to allow the installer to continue
@@ -86,7 +118,7 @@ def generate_delegation_config(selected_clis):
 def save_config(config, base_dir: Path):
     """Save config to file."""
     config_path = base_dir / "delegation_config.json"
-    with open(config_path, 'w') as f:
+    with open(config_path, 'w', encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     print(f"\033[92m[SUCCESS] Saved configuration to {config_path}\033[0m")
 
