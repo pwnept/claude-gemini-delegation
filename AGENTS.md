@@ -20,19 +20,19 @@ Use the wrapper scripts for easy delegation:
 **Unix/Mac:**
 ```bash
 PROMPT=$(./.Codex/hooks/delegate "npm ls" "Build analysis")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model gemini-2.5-flash -p "$PROMPT"
 ```
 
 **Windows (PowerShell):**
 ```powershell
 $prompt = & .Codex/hooks/delegate.ps1 "npm ls" "Build analysis"
-gemini --model gemini-3-flash -p $prompt
+gemini --model gemini-2.5-flash -p $prompt
 ```
 
 **Windows (CMD):**
 ```cmd
 FOR /F "delims=" %i IN ('.Codex\hooks\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
-gemini --model gemini-3-flash -p "%PROMPT%"
+gemini --model gemini-2.5-flash -p "%PROMPT%"
 ```
 
 ## Delegation Workflow
@@ -49,7 +49,7 @@ gemini --model gemini-3-flash -p "%PROMPT%"
 ```bash
 # Auto-routes to Gemini (if enabled)
 PROMPT=$(./.Codex/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model gemini-2.5-flash -p "$PROMPT"
 ```
 
 ### Git Operations  
@@ -63,7 +63,7 @@ aider -p "$PROMPT"
 ```bash
 # Routes based on configured preference
 PROMPT=$(./.Codex/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model gemini-2.5-flash -p "$PROMPT"
 ```
 
 ## Weekly Maintenance

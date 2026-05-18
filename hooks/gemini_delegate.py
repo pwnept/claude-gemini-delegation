@@ -127,8 +127,10 @@ def resolve_gemini_command() -> str:
 
 
 def run_gemini(command: str, model: str, prompt: str, timeout: int) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
     return subprocess.run(
-        [command, "--model", model, "-p", prompt],
+        [command, "--skip-trust", "--model", model, "-p", prompt],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -136,6 +138,7 @@ def run_gemini(command: str, model: str, prompt: str, timeout: int) -> subproces
         errors="replace",
         timeout=timeout if timeout > 0 else None,
         check=False,
+        env=env,
     )
 
 
