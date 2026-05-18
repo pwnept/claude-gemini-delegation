@@ -24,6 +24,7 @@ import platform
 
 SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -104,6 +105,7 @@ def copy_hook_files(hooks_dir: Path):
         "pre_delegate.py",
         "post_delegate.py",
         "analyze_metrics.py",
+        "gemini_delegate.py",
     ]
 
     copied_count = 0
@@ -132,7 +134,7 @@ def create_sample_claude_md(claude_dir: Path):
         print(f"⚠️  CLAUDE.md already exists, skipping")
         return
     
-    sample_content = """# Claude Code Configuration
+    sample_content = f"""# Claude Code Configuration
 
 ## Delegation with Hooks
 
@@ -141,11 +143,11 @@ Use Python hooks for cross-platform delegation:
 ```bash
 # Using wrapper script (Unix/Mac)
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Investigating build slowdown")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 
 # Using Python directly (all platforms)
 PROMPT=$(python .claude/hooks/pre_delegate.py "npm ls" "Investigating build slowdown")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 
 # Validate response
 python .claude/hooks/post_delegate.py "$RESPONSE" 10 "dependency-analysis"
@@ -158,18 +160,30 @@ Use the batch or PowerShell wrappers:
 ```powershell
 # PowerShell
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build investigation"
-gemini --model gemini-3-flash -p $prompt
+$prompt | python .claude/hooks/gemini_delegate.py
 
 # Command Prompt
 FOR /F "delims=" %i IN ('.claude\\hooks\\delegate.bat "npm ls" "Build investigation"') DO SET PROMPT=%i
-gemini --model gemini-3-flash -p "%PROMPT%"
+echo %PROMPT% | python .claude\\hooks\\gemini_delegate.py
 ```
 
 ## Core Principles
 
 - **KISS**: Keep it simple
 - **Token efficiency**: Every token counts
-- **Hook-driven automation**: Use local scripts, not subagents
+- **Hook-driven automation**: Use local scripts, not Claude subagents
+
+## Subagent Policy
+
+Do **not** use Claude subagents for delegation work. Subagents spend Claude
+tokens and defeat this configuration's token-saving purpose.
+
+When a task needs broad search, documentation lookup, security review,
+large-output command distillation, or multi-file analysis, use these hooks and
+Gemini CLI. For research, documentation, and web-search tasks, run
+`gemini_delegate.py --profile research` so Gemini Pro is tried before Flash.
+Only use Claude subagents when the user explicitly asks for Claude subagents by
+name.
 """
     
     claude_md.write_text(sample_content, encoding="utf-8")
@@ -295,10 +309,10 @@ def print_next_steps(claude_dir: Path, is_user_install: bool):
     
     if platform.system() == 'Windows':
         print(f'   $prompt = & {test_cmd}')
-        print('   gemini --model gemini-3-flash -p $prompt')
+        print('   $prompt | python .claude\\hooks\\gemini_delegate.py')
     else:
         print(f'   PROMPT=$({test_cmd})')
-        print('   gemini --model gemini-3-flash -p "$PROMPT"')
+        print(f'   gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"')
     
     print("\n📚 Documentation:")
     print(f"   {claude_dir / 'hooks' / 'README.md'}")

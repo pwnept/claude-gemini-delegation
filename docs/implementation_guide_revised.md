@@ -25,7 +25,7 @@ EOF
 # Test 4: Invoke Gemini with context
 gemini-cli --input /tmp/test_refactor.md \
            --output /tmp/test_result.md \
-           --model gemini-3.0-pro
+           --model gemini-2.5-pro
 
 # Test 5: Check token usage in Claude Code
 # (Open Claude Code, paste this, measure tokens)

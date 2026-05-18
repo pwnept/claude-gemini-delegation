@@ -52,6 +52,7 @@ def print_info(text: str):
 # Assume hook templates are in same directory as installer
 SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 
 def copy_hook_files(dest_dir: Path):
@@ -61,7 +62,8 @@ def copy_hook_files(dest_dir: Path):
     hooks_to_copy = [
         "pre_delegate.py",
         "post_delegate.py",
-        "analyze_metrics.py"
+        "analyze_metrics.py",
+        "gemini_delegate.py",
     ]
     
     copied_count = 0
@@ -219,27 +221,48 @@ Use the wrapper scripts for easy delegation:
 **Unix/Mac:**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 ```
 
 **Windows (PowerShell):**
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
-gemini --model gemini-3-flash -p $prompt
+$prompt | python .claude/hooks/gemini_delegate.py
 ```
 
 **Windows (CMD):**
 ```cmd
 FOR /F "delims=" %i IN ('.claude\\hooks\\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
-gemini --model gemini-3-flash -p "%PROMPT%"
+echo %PROMPT% | python .claude\\hooks\\gemini_delegate.py
 ```
+
+## Subagent Policy
+
+Do **not** use Claude subagents for delegation work. Subagents spend Claude
+tokens and defeat this configuration's token-saving purpose.
+
+When a task matches any delegation preset, banned operation, or large-output
+condition, use the local hooks and Gemini CLI instead of spawning a Claude
+subagent. Only use Claude subagents when the user explicitly asks for Claude
+subagents by name.
+
+## Always Delegate To Gemini
+
+- Commands expected to produce more than 500 lines of output
+- `npm ls`, `pip list`, `pip freeze`, and verbose dependency listings
+- `git log` beyond 5 commits or broad git history analysis
+- Recursive searches such as `find`, `grep -r`, or repository-wide scans
+- Reading or analyzing 3 or more new files
+- Security audits, vulnerability scans, XSS/SQL injection/CSRF checks
+- Documentation lookup or web search. Use `gemini_delegate.py --profile research` so Gemini Pro is tried before Flash.
+- Broad codebase analysis, performance review, or inspection tasks
 
 ## Delegation Workflow
 
 1. **Identify task type** - Security? Git ops? Analysis?
 2. **Check presets** - Is there a matching preset?
 3. **Use delegation hook** - Let the hook format the prompt
-4. **Execute with appropriate CLI** - Use the routed CLI
+4. **Execute with Gemini CLI** - Use `gemini_delegate.py`, not Claude subagents
 5. **Validate response** - Check quality with the post-delegation hook
 
 ## Routing Examples
@@ -248,7 +271,7 @@ gemini --model gemini-3-flash -p "%PROMPT%"
 ```bash
 # Auto-routes to Gemini (if enabled)
 PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 ```
 
 {git_operations_example}
@@ -256,7 +279,13 @@ gemini --model gemini-3-flash -p "$PROMPT"
 ```bash
 # Routes based on configured preference
 PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+```
+
+### Research / Documentation / Web Search
+```powershell
+$prompt = & .claude/hooks/delegate.ps1 "find current docs for deployment limits" "Research task"
+$prompt | python .claude/hooks/gemini_delegate.py --profile research
 ```
 
 ## Weekly Maintenance
@@ -289,7 +318,7 @@ def create_usage_examples(config: Dict, base_dir: Path):
     
     # Basic example
     basic_example = examples_dir / "basic_delegation.sh"
-    basic_example.write_text("""#!/bin/bash
+    basic_example.write_text(f"""#!/bin/bash
 # Basic delegation example
 
 # 1. Generate optimized prompt
@@ -303,10 +332,10 @@ echo ""
 
 # 2. Execute with Gemini (or other CLI)
 echo "Executing with Gemini..."
-# gemini --model gemini-3-flash -p "$PROMPT"
+# gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 
 # 3. Validate response (after execution)
-# RESPONSE=$(gemini --model gemini-3-flash -p "$PROMPT")
+# RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
 # python ../.claude/hooks/post_delegate.py "$RESPONSE" 10 "build-analysis"
 """, encoding="utf-8")
     
@@ -317,7 +346,7 @@ echo "Executing with Gemini..."
     
     # Advanced example
     advanced_example = examples_dir / "security_audit.sh"
-    advanced_example.write_text("""#!/bin/bash
+    advanced_example.write_text(f"""#!/bin/bash
 # Security audit example - delegates to Gemini
 
 # Run security scan on source files
@@ -327,7 +356,7 @@ PROMPT=$(python ../.claude/hooks/pre_delegate.py \
   8)
 
 echo "Running security audit..."
-RESPONSE=$(gemini --model gemini-3-flash -p "$PROMPT")
+RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
 
 # Validate and save results
 python ../.claude/hooks/post_delegate.py "$RESPONSE" 8 "security-audit"
@@ -350,6 +379,7 @@ def verify_installation(base_dir: Path, config: Dict) -> bool:
         (base_dir / "hooks" / "pre_delegate.py", "Pre-delegation hook"),
         (base_dir / "hooks" / "post_delegate.py", "Post-delegation hook"),
         (base_dir / "hooks" / "analyze_metrics.py", "Metrics analyzer"),
+        (base_dir / "hooks" / "gemini_delegate.py", "Gemini fallback runner"),
         (base_dir / "delegation_config.json", "Configuration file"),
         (base_dir / "CLAUDE.md", "Claude configuration"),
     ]
@@ -391,13 +421,13 @@ def show_next_steps(config: Dict):
         if os.name == "nt":
             print("   $prompt = & .claude\\hooks\\delegate.ps1 \"npm ls\" \"Test\"")
             if first_cli == "gemini":
-                print("   gemini --model gemini-3-flash -p $prompt")
+                print("   $prompt | python .claude\\hooks\\gemini_delegate.py")
             else:
                 print(f"   # Send $prompt to {first_cli_cmd} using that CLI's prompt option")
         else:
             print(f"   PROMPT=$(./.claude/hooks/delegate \"npm ls\" \"Test\")")
             if first_cli == "gemini":
-                print(f"   {first_cli_cmd} --model gemini-3-flash -p \"$PROMPT\"")
+                print(f"   {first_cli_cmd} --model {DEFAULT_GEMINI_MODEL} -p \"$PROMPT\"")
             else:
                 print(f"   # Send \"$PROMPT\" to {first_cli_cmd} using that CLI's prompt option")
     

@@ -55,6 +55,10 @@ python3 setup.py --enable-cli copilot
 python3 setup.py --all-clis
 ```
 
+On Windows, generated examples use `gemini_delegate.py`, which calls
+`gemini.cmd` and falls back across the stable Gemini 2.5 Flash, Flash Lite,
+and Pro model pools when Gemini reports capacity or 429 errors.
+
 *(Note: If you want to use the automated setup in a different project, you can copy `setup.py`, `install.py`, and the `hooks/` folder to that project's root folder, then run `python3 setup.py` from there.)*
 
 #### Option B: Install Globally (Applies to all projects)
@@ -142,6 +146,11 @@ python3 setup_hooks.py
 
 Your `.claude/CLAUDE.md` configures strict rules for when Claude MUST delegate:
 
+**Forbidden for delegation:**
+- Do not use Claude subagents for token-heavy delegation work
+- Do not replace Gemini delegation with Claude Task/subagent calls
+- Use Claude subagents only when the user explicitly asks for Claude subagents
+
 **BANNED Operations (Always Delegate):**
 - Commands producing >500 lines of output
 - `npm ls`, `pip list`, `git log` (>5 commits)
@@ -174,7 +183,7 @@ User: "Check npm dependencies"
 Claude: I'll delegate this to preserve your quota:
 
 PROMPT=$(python3 .claude/hooks/pre_delegate.py "npm ls" "Build analysis" 8)
-gemini --model gemini-3-flash -p "$PROMPT"
+gemini --model gemini-2.5-flash -p "$PROMPT"
 
 [Gemini reads 1,847 lines, returns 150-token summary]
 Total cost: 150 tokens (92% savings!)
