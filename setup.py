@@ -16,9 +16,13 @@ import sys
 import json
 import shutil
 import argparse
+import datetime
 from pathlib import Path
 from typing import Dict
 import stat
+
+MARKER_BEGIN = "> [claude-gemini-delegation:begin]"
+MARKER_END = "> [claude-gemini-delegation:end]"
 
 # Import the basic installer classes
 from pathlib import Path
@@ -170,13 +174,18 @@ def build_routing_presets(config: Dict) -> Dict:
 
 
 def create_enhanced_claude_md(config: Dict, presets: Dict, base_dir: Path):
-    """Create enhanced CLAUDE.md with routing presets."""
+    """Create or update CLAUDE.md with routing presets.
+
+    Uses begin/end markers so the managed delegation section can be updated
+    in-place without overwriting surrounding content added by the user.
+    A timestamped backup is created whenever an existing file is modified.
+    """
     claude_md = base_dir / "CLAUDE.md"
-    
+
     enabled_clis = config.get("cli_configs", {})
-    
+
     if not enabled_clis:
-        content = """# Claude Code Configuration
+        managed_body = """# Claude Code Configuration
 
 ## Delegation Status
 
@@ -187,7 +196,7 @@ No external CLIs configured. Run `python setup.py` to enable delegation.
             f"- **{v['name']}**: {v['description']}"
             for v in enabled_clis.values()
         ])
-        
+
         preset_list = "\n".join([
             f"- **{name}**: Routes to `{p['cli']}`\n  Pattern: `{p['pattern']}`"
             for name, p in presets.items()
@@ -203,8 +212,8 @@ PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bu
 aider -p "$PROMPT"
 ```
 """
-        
-        content = f"""# Claude Code Configuration
+
+        managed_body = f"""# Claude Code Configuration
 
 ## Enabled Delegation CLIs
 
@@ -304,9 +313,29 @@ To reconfigure delegation preferences, run the setup wizard again manually.
 
 This will let you enable/disable CLIs.
 """
-    
-    claude_md.write_text(content, encoding="utf-8")
-    print_success(f"Created enhanced CLAUDE.md")
+
+    managed_section = f"{MARKER_BEGIN}\n{managed_body.strip()}\n{MARKER_END}\n"
+
+    if claude_md.exists():
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = claude_md.with_name(f"CLAUDE.md.bak.{timestamp}")
+        shutil.copy2(claude_md, backup_path)
+        print_info(f"Backed up existing CLAUDE.md to {backup_path.name}")
+
+        existing = claude_md.read_text(encoding="utf-8")
+        if MARKER_BEGIN in existing and MARKER_END in existing:
+            before = existing[:existing.index(MARKER_BEGIN)]
+            after = existing[existing.index(MARKER_END) + len(MARKER_END):]
+            new_content = before + managed_section + after
+            print_info("Updated existing delegation section in CLAUDE.md")
+        else:
+            new_content = existing.rstrip("\n") + "\n\n" + managed_section
+            print_info("Appended delegation section to existing CLAUDE.md")
+    else:
+        new_content = managed_section
+
+    claude_md.write_text(new_content, encoding="utf-8")
+    print_success("Updated CLAUDE.md")
 
 
 def create_usage_examples(config: Dict, base_dir: Path):

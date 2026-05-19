@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Cross-platform setup script for Claude-Gemini delegation hooks
 
@@ -10,7 +11,7 @@ This script:
 
 Usage:
     python setup-hooks.py [--user]
-    
+
 Options:
     --user    Install in user's home directory (~/.claude)
 """
@@ -19,8 +20,12 @@ import sys
 import os
 import stat
 import shutil
+import datetime
 from pathlib import Path
 import platform
+
+MARKER_BEGIN = "> [claude-gemini-delegation:begin]"
+MARKER_END = "> [claude-gemini-delegation:end]"
 
 SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
@@ -34,36 +39,36 @@ if hasattr(sys.stdout, "reconfigure"):
 def check_python_version():
     """Ensure Python 3.6+ is installed."""
     if sys.version_info < (3, 6):
-        print("❌ Error: Python 3.6 or higher is required")
-        print(f"   Current version: {sys.version}")
+        print("[ERROR] Python 3.6 or higher is required")
+        print("   Current version: " + sys.version)
         sys.exit(1)
-    
-    print(f"✅ Python {sys.version_info.major}.{sys.version_info.minor} detected")
+
+    print("[OK] Python {}.{} detected".format(sys.version_info.major, sys.version_info.minor))
 
 
-def create_directory_structure(base_dir: Path):
+def create_directory_structure(base_dir):
     """Create necessary directory structure."""
     dirs = [
         base_dir / "hooks",
         base_dir / "metrics",
     ]
-    
+
     for dir_path in dirs:
         dir_path.mkdir(parents=True, exist_ok=True)
-        print(f"✅ Created directory: {dir_path}")
+        print("[OK] Created directory: " + str(dir_path))
 
 
-def make_executable(file_path: Path):
+def make_executable(file_path):
     """Make a file executable on Unix-like systems."""
     if platform.system() != 'Windows':
         current_permissions = file_path.stat().st_mode
         file_path.chmod(current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        print(f"   Made executable: {file_path.name}")
+        print("   Made executable: " + file_path.name)
 
 
-def create_wrapper_scripts(hooks_dir: Path):
+def create_wrapper_scripts(hooks_dir):
     """Create convenient wrapper scripts for different platforms."""
-    
+
     # Unix wrapper (bash)
     unix_wrapper = hooks_dir / "delegate"
     unix_wrapper.write_text("""#!/bin/bash
@@ -74,7 +79,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 "$SCRIPT_DIR/pre_delegate.py" "$@"
 """, encoding="utf-8")
     make_executable(unix_wrapper)
-    
+
     # Windows wrapper (batch)
     windows_wrapper = hooks_dir / "delegate.bat"
     windows_wrapper.write_text("""@echo off
@@ -83,7 +88,7 @@ REM Usage: delegate.bat <task> [context] [max_lines]
 
 python "%~dp0pre_delegate.py" %*
 """, encoding="utf-8")
-    
+
     # PowerShell wrapper
     ps_wrapper = hooks_dir / "delegate.ps1"
     ps_wrapper.write_text("""# Wrapper script for delegation hooks
@@ -92,14 +97,14 @@ python "%~dp0pre_delegate.py" %*
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 python "$ScriptDir/pre_delegate.py" $args
 """, encoding="utf-8")
-    
-    print("✅ Created wrapper scripts:")
-    print(f"   • delegate (Unix)")
-    print(f"   • delegate.bat (Windows)")
-    print(f"   • delegate.ps1 (PowerShell)")
+
+    print("[OK] Created wrapper scripts:")
+    print("   - delegate (Unix)")
+    print("   - delegate.bat (Windows)")
+    print("   - delegate.ps1 (PowerShell)")
 
 
-def copy_hook_files(hooks_dir: Path):
+def copy_hook_files(hooks_dir):
     """Copy the actual hook scripts next to the wrappers."""
     hooks_to_copy = [
         "pre_delegate.py",
@@ -113,28 +118,29 @@ def copy_hook_files(hooks_dir: Path):
         source = HOOKS_SOURCE / hook_file
         dest = hooks_dir / hook_file
         if not source.exists():
-            print(f"⚠️  {hook_file} not found in source, skipping")
+            print("[WARNING] " + hook_file + " not found in source, skipping")
             continue
 
         shutil.copy2(source, dest)
         make_executable(dest)
         copied_count += 1
-        print(f"✅ Installed {hook_file}")
+        print("[OK] Installed " + hook_file)
 
     if copied_count != len(hooks_to_copy):
-        print("❌ Error: one or more hook scripts were missing")
+        print("[ERROR] One or more hook scripts were missing")
         sys.exit(1)
 
 
-def create_sample_claude_md(claude_dir: Path):
-    """Create a sample CLAUDE.md if it doesn't exist."""
+def create_sample_claude_md(claude_dir):
+    """Create or update the delegation section in CLAUDE.md.
+
+    Uses begin/end markers so the managed section can be updated in-place
+    without overwriting surrounding user content. A timestamped backup is
+    created whenever an existing file is modified.
+    """
     claude_md = claude_dir / "CLAUDE.md"
-    
-    if claude_md.exists():
-        print(f"⚠️  CLAUDE.md already exists, skipping")
-        return
-    
-    sample_content = f"""# Claude Code Configuration
+
+    managed_body = """# Claude Code Configuration
 
 ## Delegation with Hooks
 
@@ -143,11 +149,11 @@ Use Python hooks for cross-platform delegation:
 ```bash
 # Using wrapper script (Unix/Mac)
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Investigating build slowdown")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+gemini --model {model} -p "$PROMPT"
 
 # Using Python directly (all platforms)
 PROMPT=$(python .claude/hooks/pre_delegate.py "npm ls" "Investigating build slowdown")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+gemini --model {model} -p "$PROMPT"
 
 # Validate response
 python .claude/hooks/post_delegate.py "$RESPONSE" 10 "dependency-analysis"
@@ -184,16 +190,36 @@ Gemini CLI. For research, documentation, and web-search tasks, run
 `gemini_delegate.py --profile research` so Gemini Pro is tried before Flash.
 Only use Claude subagents when the user explicitly asks for Claude subagents by
 name.
-"""
-    
-    claude_md.write_text(sample_content, encoding="utf-8")
-    print(f"✅ Created sample CLAUDE.md")
+""".format(model=DEFAULT_GEMINI_MODEL)
+
+    managed_section = MARKER_BEGIN + "\n" + managed_body.strip() + "\n" + MARKER_END + "\n"
+
+    if claude_md.exists():
+        unix_ts = int(datetime.datetime.now().timestamp())
+        backup_path = claude_md.with_name("global_claude_md_backup_" + str(unix_ts) + ".md")
+        shutil.copy2(claude_md, backup_path)
+        print("[OK] Backed up existing CLAUDE.md to " + backup_path.name)
+
+        existing = claude_md.read_text(encoding="utf-8")
+        if MARKER_BEGIN in existing and MARKER_END in existing:
+            before = existing[:existing.index(MARKER_BEGIN)]
+            after = existing[existing.index(MARKER_END) + len(MARKER_END):]
+            new_content = before + managed_section + after
+            print("[OK] Updated existing delegation section in CLAUDE.md")
+        else:
+            new_content = existing.rstrip("\n") + "\n\n" + managed_section
+            print("[OK] Appended delegation section to existing CLAUDE.md")
+    else:
+        new_content = managed_section
+        print("[OK] Created CLAUDE.md")
+
+    claude_md.write_text(new_content, encoding="utf-8")
 
 
-def create_readme(hooks_dir: Path):
+def create_readme(hooks_dir):
     """Create README for hooks directory."""
     readme = hooks_dir / "README.md"
-    
+
     content = """# Delegation Hooks
 
 Cross-platform Python hooks for Claude Code -> Gemini delegation.
@@ -253,117 +279,117 @@ All scripts use standard library only and work identically across:
 - macOS (Terminal, iTerm2)
 - Linux (bash, zsh, fish)
 """
-    
+
     readme.write_text(content, encoding="utf-8")
-    print(f"✅ Created README.md in hooks directory")
+    print("[OK] Created README.md in hooks directory")
 
 
-def create_gitignore(claude_dir: Path):
+def create_gitignore(claude_dir):
     """Create .gitignore for metrics."""
     gitignore = claude_dir / ".gitignore"
-    
+
     if gitignore.exists():
         content = gitignore.read_text()
         if "metrics/" not in content:
             gitignore.write_text(content + "\n# Delegation metrics\nmetrics/\n", encoding="utf-8")
-            print("✅ Updated .gitignore")
+            print("[OK] Updated .gitignore")
     else:
         gitignore.write_text("# Delegation metrics\nmetrics/\n", encoding="utf-8")
-        print("✅ Created .gitignore")
+        print("[OK] Created .gitignore")
 
 
-def print_next_steps(claude_dir: Path, is_user_install: bool):
+def print_next_steps(claude_dir, is_user_install):
     """Print next steps for the user."""
-    print("\n" + "="*60)
-    print("🎉 Setup Complete!")
-    print("="*60)
-    
-    print("\n📍 Installation Location:")
-    print(f"   {claude_dir.absolute()}")
-    
-    print("\n🚀 Next Steps:")
-    
+    print("\n" + "=" * 60)
+    print("Setup Complete!")
+    print("=" * 60)
+
+    print("\nInstallation Location:")
+    print("   " + str(claude_dir.absolute()))
+
+    print("\nNext Steps:")
+
     if is_user_install:
         print("\n1. This is a user-wide installation")
         print("   Hooks will be available for all your projects")
     else:
         print("\n1. This is a project-specific installation")
         print("   Hooks are only available in this project")
-    
+
     print("\n2. Test the hooks:")
-    
+
     if platform.system() == 'Windows':
-        print(f'   cd {claude_dir / "hooks"}')
+        print("   cd " + str(claude_dir / "hooks"))
         print('   python pre_delegate.py "npm ls" "Test" 5')
     else:
-        print(f'   cd {claude_dir / "hooks"}')
+        print("   cd " + str(claude_dir / "hooks"))
         print('./delegate "npm ls" "Test" 5')
-    
+
     print("\n3. Update your workflow:")
     print("   Edit your CLAUDE.md to reference the hooks")
-    
+
     print("\n4. Run a test delegation:")
     test_cmd = 'python .claude/hooks/pre_delegate.py "git status" "Test delegation"'
     if platform.system() != 'Windows':
         test_cmd = './.claude/hooks/delegate "git status" "Test delegation"'
-    
+
     if platform.system() == 'Windows':
-        print(f'   $prompt = & {test_cmd}')
-        print('   $prompt | python .claude\\hooks\\gemini_delegate.py')
+        print("   $prompt = & " + test_cmd)
+        print("   $prompt | python .claude\\hooks\\gemini_delegate.py")
     else:
-        print(f'   PROMPT=$({test_cmd})')
-        print(f'   gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"')
-    
-    print("\n📚 Documentation:")
-    print(f"   {claude_dir / 'hooks' / 'README.md'}")
-    
-    print("\n💡 Tips:")
-    print("   • Hooks work identically on Windows, Mac, and Linux")
-    print("   • No dependencies needed beyond Python 3.6+")
-    print("   • Metrics are auto-logged in .claude/metrics/")
-    print("   • Run analyze_metrics.py weekly to optimize prompts")
+        print("   PROMPT=$(" + test_cmd + ")")
+        print("   gemini --model " + DEFAULT_GEMINI_MODEL + ' -p "$PROMPT"')
+
+    print("\nDocumentation:")
+    print("   " + str(claude_dir / "hooks" / "README.md"))
+
+    print("\nTips:")
+    print("   - Hooks work identically on Windows, Mac, and Linux")
+    print("   - No dependencies needed beyond Python 3.6+")
+    print("   - Metrics are auto-logged in .claude/metrics/")
+    print("   - Run analyze_metrics.py weekly to optimize prompts")
 
 
 def main():
     """Main setup process."""
-    print("🔧 Claude-Gemini Delegation Hooks Setup")
+    print("Claude-Gemini Delegation Hooks Setup")
     print("=" * 60)
-    
+
     # Check Python version
     check_python_version()
-    
+
     # Determine installation location
     is_user_install = '--user' in sys.argv
-    
+
     if is_user_install:
         base_dir = Path.home() / ".claude"
-        print(f"\n📍 Installing to user directory: {base_dir}")
+        print("\nInstalling to user directory: " + str(base_dir))
     else:
         base_dir = Path.cwd() / ".claude"
-        print(f"\n📍 Installing to project directory: {base_dir}")
-    
+        print("\nInstalling to project directory: " + str(base_dir))
+
     print()
-    
+
     # Create directory structure
     create_directory_structure(base_dir)
-    
+
     # Create wrapper scripts
     hooks_dir = base_dir / "hooks"
     create_wrapper_scripts(hooks_dir)
     copy_hook_files(hooks_dir)
-    
+
     # Create documentation
     create_sample_claude_md(base_dir)
     create_readme(hooks_dir)
     create_gitignore(base_dir)
-    
+
     # Make Python scripts executable on Unix
     if platform.system() != 'Windows':
         for script in ['pre_delegate.py', 'post_delegate.py', 'analyze_metrics.py']:
             script_path = hooks_dir / script
             if script_path.exists():
                 make_executable(script_path)
-    
+
     # Print next steps
     print_next_steps(base_dir, is_user_install)
 
