@@ -5,6 +5,7 @@ import os
 import shutil
 import json
 import subprocess
+import datetime
 from pathlib import Path
 
 SUPPORTED_CLIS = ("gemini", "aider", "copilot", "gpt-me")
@@ -121,6 +122,26 @@ def save_config(config, base_dir: Path):
     with open(config_path, 'w', encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     print(f"\033[92m[SUCCESS] Saved configuration to {config_path}\033[0m")
+
+def ensure_root_claude_bridge(project_dir: Path):
+    """Ensure project-level CLAUDE.md delegates to AGENTS.md."""
+    claude_md = project_dir / "CLAUDE.md"
+    desired_content = "@AGENTS.md\n"
+
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
+        if existing == desired_content:
+            print(f"\033[92m[SUCCESS] Root CLAUDE.md already points to AGENTS.md\033[0m")
+            return claude_md
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = claude_md.with_name(f"CLAUDE.md.bak.{timestamp}")
+        shutil.copy2(claude_md, backup_path)
+        print(f"\033[94m[INFO] Backed up existing root CLAUDE.md to {backup_path.name}\033[0m")
+
+    claude_md.write_text(desired_content, encoding="utf-8")
+    print(f"\033[92m[SUCCESS] Updated root CLAUDE.md to @AGENTS.md\033[0m")
+    return claude_md
 
 def install_not_found_clis(selected):
     """Offer help for missing CLIs."""

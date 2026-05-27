@@ -216,6 +216,27 @@ name.
     claude_md.write_text(new_content, encoding="utf-8")
 
 
+def ensure_root_claude_bridge(project_dir):
+    """Ensure project-level CLAUDE.md delegates to AGENTS.md."""
+    claude_md = project_dir / "CLAUDE.md"
+    desired_content = "@AGENTS.md\n"
+
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
+        if existing == desired_content:
+            print("[OK] Root CLAUDE.md already points to AGENTS.md")
+            return claude_md
+
+        unix_ts = int(datetime.datetime.now().timestamp())
+        backup_path = claude_md.with_name("root_claude_md_backup_" + str(unix_ts) + ".md")
+        shutil.copy2(claude_md, backup_path)
+        print("[OK] Backed up existing root CLAUDE.md to " + backup_path.name)
+
+    claude_md.write_text(desired_content, encoding="utf-8")
+    print("[OK] Updated root CLAUDE.md to @AGENTS.md")
+    return claude_md
+
+
 def create_readme(hooks_dir):
     """Create README for hooks directory."""
     readme = hooks_dir / "README.md"
@@ -380,6 +401,8 @@ def main():
 
     # Create documentation
     create_sample_claude_md(base_dir)
+    if not is_user_install:
+        ensure_root_claude_bridge(base_dir.parent)
     create_readme(hooks_dir)
     create_gitignore(base_dir)
 

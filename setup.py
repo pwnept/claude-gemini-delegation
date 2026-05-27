@@ -403,6 +403,7 @@ echo "Results saved to security-audit-results.txt"
 def verify_installation(base_dir: Path, config: Dict) -> bool:
     """Verify that installation was successful."""
     print_header("Verifying Installation")
+    root_claude_md = base_dir.parent / "CLAUDE.md"
     
     checks = [
         (base_dir / "hooks" / "pre_delegate.py", "Pre-delegation hook"),
@@ -411,6 +412,7 @@ def verify_installation(base_dir: Path, config: Dict) -> bool:
         (base_dir / "hooks" / "gemini_delegate.py", "Gemini fallback runner"),
         (base_dir / "delegation_config.json", "Configuration file"),
         (base_dir / "CLAUDE.md", "Claude configuration"),
+        (root_claude_md, "Root CLAUDE.md bridge"),
     ]
     
     all_passed = True
@@ -419,6 +421,13 @@ def verify_installation(base_dir: Path, config: Dict) -> bool:
             print_success(f"{description}: {path}")
         else:
             print_error(f"{description} missing: {path}")
+            all_passed = False
+
+    if root_claude_md.exists():
+        if root_claude_md.read_text(encoding="utf-8") == "@AGENTS.md\n":
+            print_success("Root CLAUDE.md content: @AGENTS.md")
+        else:
+            print_error("Root CLAUDE.md content is not exactly @AGENTS.md")
             all_passed = False
     
     # Check if at least one CLI is enabled
@@ -483,6 +492,7 @@ def main():
         setup_hooks,
         generate_delegation_config,
         save_config,
+        ensure_root_claude_bridge,
         install_not_found_clis
     )
 
@@ -501,6 +511,12 @@ def main():
         action="store_true",
         help="Enable every supported CLI that is installed.",
     )
+    parser.add_argument(
+        "--target",
+        type=str,
+        default=None,
+        help="Target directory for installation (default: current working directory)",
+    )
     args = parser.parse_args()
     
     print_header("Claude-Gemini Delegation Enhanced Setup")
@@ -510,7 +526,10 @@ def main():
         sys.exit(1)
     
     # Determine installation location
-    base_dir = Path.cwd() / ".claude"
+    if args.target:
+        base_dir = Path(args.target) / ".claude"
+    else:
+        base_dir = Path.cwd() / ".claude"
     print_info(f"Installing to: {base_dir.absolute()}")
     
     # Discover CLIs
@@ -549,6 +568,7 @@ def main():
     
     # Create enhanced CLAUDE.md
     create_enhanced_claude_md(config, presets, base_dir)
+    ensure_root_claude_bridge(base_dir.parent)
     
     # Create usage examples
     create_usage_examples(config, base_dir)

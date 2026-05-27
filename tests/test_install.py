@@ -4,12 +4,13 @@ Run with: python -m unittest discover tests
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from install import interactive_selection
+from install import ensure_root_claude_bridge, interactive_selection
 
 
 def fake_discovered():
@@ -57,6 +58,28 @@ class TestInstallerSelection(unittest.TestCase):
             enabled_cli_names=["gemini", "aider"],
         )
         self.assertEqual(list(selected.keys()), ["gemini"])
+
+
+class TestRootClaudeBridge(unittest.TestCase):
+    def test_creates_root_claude_bridge(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+
+            result = ensure_root_claude_bridge(project_dir)
+
+            self.assertEqual(result, project_dir / "CLAUDE.md")
+            self.assertEqual((project_dir / "CLAUDE.md").read_text(encoding="utf-8"), "@AGENTS.md\n")
+
+    def test_replaces_existing_root_claude_bridge_with_backup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            claude_md = project_dir / "CLAUDE.md"
+            claude_md.write_text("@AGENTS.md\n@.claude/CLAUDE.md\n", encoding="utf-8")
+
+            ensure_root_claude_bridge(project_dir)
+
+            self.assertEqual(claude_md.read_text(encoding="utf-8"), "@AGENTS.md\n")
+            self.assertEqual(len(list(project_dir.glob("CLAUDE.md.bak.*"))), 1)
 
 
 if __name__ == "__main__":

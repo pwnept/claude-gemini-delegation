@@ -96,9 +96,10 @@ Copy-Item -Path ".claude\CLAUDE.md" -Destination "C:\path\to\your\project\.claud
 
 The installer configures:
 
-1. **CLAUDE.md** - Delegation rules (~300 tokens)
-2. **Claude Code settings** - Optimized model and token behavior
-3. **Delegation hooks** (optional) - Automated prompt formatting
+1. **Root CLAUDE.md** - Contains `@AGENTS.md` so Claude follows the shared agent instructions
+2. **.claude/CLAUDE.md** - Delegation rules and routing examples
+3. **Claude Code settings** - Optimized model and token behavior
+4. **Delegation hooks** (optional) - Automated prompt formatting
 
 **Settings configured in `.claude/settings.json`:**
 
