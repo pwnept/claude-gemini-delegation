@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -140,19 +141,85 @@ def resolve_gemini_command() -> str:
     return shutil.which("gemini") or "gemini"
 
 
-def run_gemini(command: str, model: str, prompt: str, timeout: int) -> subprocess.CompletedProcess:
+def run_gemini(
+    command: str,
+    model: str,
+    prompt: str,
+    timeout: int,
+    idle_timeout: int = 30,
+) -> subprocess.CompletedProcess:
+    """Run Gemini CLI with activity-aware streaming timeout.
+
+    Kills the process if no output appears on stdout or stderr for
+    idle_timeout seconds. As long as Gemini is streaming (progress lines,
+    search results being compiled, etc.) the idle timer resets, so research
+    tasks that take several minutes are not cut short. The hard cap is
+    timeout seconds; 0 means no hard cap.
+    """
     env = os.environ.copy()
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
-    return subprocess.run(
+
+    proc = subprocess.Popen(
         [command, "--skip-trust", "--model", model, "-p", prompt],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout if timeout > 0 else None,
-        check=False,
         env=env,
+    )
+
+    stdout_chunks: list = []
+    stderr_chunks: list = []
+    last_activity = [time.monotonic()]
+
+    def _drain(stream, collector):
+        for chunk in iter(lambda: stream.read(256), ""):
+            collector.append(chunk)
+            last_activity[0] = time.monotonic()
+        stream.close()
+
+    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
+    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    start = time.monotonic()
+    kill_reason = None
+
+    while proc.poll() is None:
+        now = time.monotonic()
+        if idle_timeout > 0 and (now - last_activity[0]) >= idle_timeout:
+            kill_reason = "idle"
+            proc.kill()
+            break
+        if timeout > 0 and (now - start) >= timeout:
+            kill_reason = "max"
+            proc.kill()
+            break
+        time.sleep(0.5)
+
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
+
+    if kill_reason:
+        elapsed = time.monotonic() - start
+        secs = idle_timeout if kill_reason == "idle" else timeout
+        raise subprocess.TimeoutExpired(
+            cmd=[command, "--model", model],
+            timeout=secs,
+            output=stdout,
+            stderr=stderr,
+        )
+
+    return subprocess.CompletedProcess(
+        args=[command, "--skip-trust", "--model", model, "-p", prompt],
+        returncode=proc.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
@@ -176,10 +243,16 @@ def parse_args() -> argparse.Namespace:
         help="Cooldown to apply when Gemini reports capacity without a reset duration.",
     )
     parser.add_argument(
+        "--idle-timeout-seconds",
+        type=int,
+        default=30,
+        help="Kill model if no output for this many seconds (default 30). 0 disables.",
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=int,
-        default=60,
-        help="Per-model subprocess timeout in seconds (default 60). 0 disables.",
+        default=600,
+        help="Hard cap per-model in seconds (default 600). 0 disables.",
     )
     parser.add_argument(
         "--state-file",
@@ -234,11 +307,17 @@ def main() -> int:
 
         print("Trying Gemini model: {0}".format(model), file=sys.stderr)
         try:
-            result = run_gemini(command, model, prompt, args.timeout_seconds)
+            result = run_gemini(
+                command, model, prompt,
+                timeout=args.timeout_seconds,
+                idle_timeout=args.idle_timeout_seconds,
+            )
         except subprocess.TimeoutExpired as exc:
             last_model = model
             last_result = None
-            error_text = "Timed out after {0}s".format(args.timeout_seconds)
+            idle = args.idle_timeout_seconds
+            hard = args.timeout_seconds
+            error_text = "Timed out (idle>{0}s or >{1}s total)".format(idle, hard)
             print("{0}: {1}".format(model, error_text), file=sys.stderr)
             mark_cooldown(model, state, error_text, time.time(), args.cooldown_seconds)
             continue
