@@ -161,6 +161,7 @@ def run_gemini(
 
     proc = subprocess.Popen(
         [command, "--skip-trust", "--model", model, "-p", prompt],
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
