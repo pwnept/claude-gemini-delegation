@@ -18,7 +18,7 @@ import shutil
 import argparse
 import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Set
 import stat
 
 MARKER_BEGIN = "> [claude-gemini-delegation:begin]"
@@ -71,6 +71,92 @@ SHARED_HOOK_SCRIPTS = [
 ]
 
 
+def get_registry_path() -> Path:
+    """Get the path to the global installation registry."""
+    return Path.home() / ".gemini-delegation-registry.json"
+
+
+def load_registry() -> Set[str]:
+    """Load the set of installed project directories from the global registry."""
+    registry_path = get_registry_path()
+    if not registry_path.exists():
+        return set()
+    try:
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+        return set(data.get("installations", []))
+    except (json.JSONDecodeError, OSError):
+        print_warning(f"Failed to read registry at {registry_path}. Starting fresh.")
+        return set()
+
+
+def save_registry(installations: Set[str]):
+    """Save the set of installed project directories to the global registry."""
+    registry_path = get_registry_path()
+    data = {"installations": sorted(list(installations))}
+    try:
+        registry_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError as e:
+        print_warning(f"Failed to write registry to {registry_path}: {e}")
+
+
+def register_installation(project_dir: Path):
+    """Add a project directory to the global registry."""
+    installations = load_registry()
+    abs_path = str(project_dir.resolve())
+    if abs_path not in installations:
+        installations.add(abs_path)
+        save_registry(installations)
+        print_info(f"Registered installation at: {abs_path}")
+
+
+def update_all_installations(source_hooks: Path):
+    """Update hook scripts in all registered installations."""
+    print_header("Updating All Registered Installations")
+    installations = load_registry()
+    if not installations:
+        print_info("No installations found in registry.")
+        return
+
+    valid_installations = set()
+    updated_count = 0
+
+    for path_str in installations:
+        project_dir = Path(path_str)
+        if not project_dir.exists() or not project_dir.is_dir():
+            print_warning(f"Project directory no longer exists: {path_str}")
+            continue
+        
+        gem_dir = project_dir / GEMINI_DELEGATION_DIR
+        hooks_dir = gem_dir / "hooks"
+        
+        if not hooks_dir.exists():
+            print_warning(f"Hooks directory missing in {path_str}, skipping update.")
+            continue
+
+        valid_installations.add(path_str)
+        print_info(f"Updating: {path_str}")
+        
+        for script in SHARED_HOOK_SCRIPTS:
+            src = source_hooks / script
+            if not src.exists():
+                continue
+            dest = hooks_dir / script
+            shutil.copy2(src, dest)
+            if os.name != "nt":
+                dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        
+        # Rewrite wrappers just in case logic changed
+        _write_gemini_delegation_wrappers(hooks_dir)
+        updated_count += 1
+        
+    # Clean up registry
+    if len(valid_installations) != len(installations):
+        save_registry(valid_installations)
+        print_info("Cleaned up missing directories from registry.")
+        
+    print_success(f"Successfully updated {updated_count} installation(s).")
+
+
 def install_gemini_delegation_dir(project_dir: Path, config: dict):
     """Install the shared .gemini-delegation/ directory with all hook scripts."""
     gem_dir = project_dir / GEMINI_DELEGATION_DIR
@@ -100,6 +186,9 @@ def install_gemini_delegation_dir(project_dir: Path, config: dict):
     with config_path.open("w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     print_success(f"Saved config to {config_path}")
+    
+    # Register installation globally
+    register_installation(project_dir)
 
 
 def _write_gemini_delegation_wrappers(hooks_dir: Path):
@@ -908,7 +997,19 @@ def main():
         default=None,
         help="Target directory for installation (default: current working directory)",
     )
+    parser.add_argument(
+        "--update-all",
+        action="store_true",
+        help="Update all globally registered installations with the latest hook scripts.",
+    )
     args = parser.parse_args()
+    
+    if args.update_all:
+        if not HOOKS_SOURCE.exists():
+            print_error(f"Hooks source directory not found: {HOOKS_SOURCE}")
+            sys.exit(1)
+        update_all_installations(HOOKS_SOURCE)
+        sys.exit(0)
     
     print_header("Claude-Gemini Delegation Enhanced Setup")
     
