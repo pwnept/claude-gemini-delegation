@@ -40,7 +40,7 @@ PowerShell:
   $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 
 Or with validation/metrics:
-  {_HOOK_PREFIX}/delegate_and_log.ps1 "<task>" "<context>" 10
+  & {_HOOK_PREFIX}/delegate_and_log.ps1 "<task>" "<context>" 10
 
 Add -Profile research for documentation lookup or web search.
 """
