@@ -170,12 +170,17 @@ exit 127
 
 
 def create_claude_settings(claude_dir):
-    """Merge the delegation guard PreToolUse hook into .claude/settings.json."""
+    """Merge the delegation guard PreToolUse hook into settings.json.
+
+    Works for both .claude/ and .Codex/ — derives the hook path from
+    the directory name so the command is always correct.
+    """
     settings_path = claude_dir / "settings.json"
+    hook_root = claude_dir.name  # ".claude" or ".Codex"
     command = (
-        "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/delegation_guard.ps1"
+        f"powershell -NoProfile -ExecutionPolicy Bypass -File {hook_root}/hooks/delegation_guard.ps1"
         if platform.system() == "Windows"
-        else "python3 .claude/hooks/delegation_guard.py"
+        else f"python3 {hook_root}/hooks/delegation_guard.py"
     )
     guard_entry = {
         "matcher": "Bash",
@@ -704,6 +709,7 @@ def main():
         create_directory_structure(codex_dir)
         create_wrapper_scripts(codex_dir / "hooks")
         copy_hook_files(codex_dir / "hooks")
+        create_claude_settings(codex_dir)
         create_readme(codex_dir / "hooks")
         create_gitignore(codex_dir)
         root_claude_md = base_dir.parent / "CLAUDE.md"

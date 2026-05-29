@@ -9,10 +9,15 @@ and print redirection guidance to stderr.
 import json
 import re
 import sys
+from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# Derive hook prefix from script location so guidance is correct whether
+# the script lives in .claude/hooks/ or .Codex/hooks/.
+_HOOK_PREFIX = Path(__file__).resolve().parent.parent.name + "/hooks"
 
 PATTERNS = [
     (re.compile(r"\bnpm\s+ls\b"), "npm ls"),
@@ -24,14 +29,14 @@ PATTERNS = [
     (re.compile(r"\bpip\s+install\b.*--dry"), "pip dry-run"),
 ]
 
-GUIDANCE = """This command matches a delegation pattern. Use Gemini instead:
+GUIDANCE = f"""This command matches a delegation pattern. Use Gemini instead:
 
 PowerShell:
-  $prompt = & .claude/hooks/delegate.ps1 "<task>" "<context>"
-  $prompt | py -3 .claude/hooks/gemini_delegate.py
+  $prompt = & {_HOOK_PREFIX}/delegate.ps1 "<task>" "<context>"
+  $prompt | py -3 {_HOOK_PREFIX}/gemini_delegate.py
 
 Or with validation/metrics:
-  .claude/hooks/delegate_and_log.ps1 "<task>" "<context>" 10
+  {_HOOK_PREFIX}/delegate_and_log.ps1 "<task>" "<context>" 10
 
 Add -Profile research for documentation lookup or web search.
 """
