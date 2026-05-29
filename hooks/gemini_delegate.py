@@ -53,21 +53,27 @@ CAPACITY_PATTERNS = (
 
 
 def find_agent_dir(start: Path) -> Path:
-    # Use the script's own parent dir (.claude or .Codex) when available so
-    # each environment gets isolated metrics/state rather than both writing
-    # to .claude/.
+    # 1. Respect DELEGATION_HOOK_PREFIX env var set by per-env shim
+    hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
+    if hook_prefix:
+        prefix_path = Path(hook_prefix)
+        if prefix_path.parent.name in (".claude", ".Codex"):
+            return prefix_path.parent
+
+    # 2. Use script's own parent dir if it is a known agent dir
     script_parent = Path(__file__).resolve().parent.parent
     if script_parent.name in (".claude", ".Codex", ".gemini-delegation"):
         return script_parent
 
+    # 3. Search up the tree
     current = start.resolve()
     for directory in (current, *current.parents):
-        for name in (".claude", ".Codex"):
+        for name in (".gemini-delegation", ".claude", ".Codex"):
             candidate = directory / name
             if candidate.exists():
                 return candidate
 
-    return current / ".claude"
+    return current / ".gemini-delegation"
 
 
 def load_state(path: Path) -> dict:
@@ -172,8 +178,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout-seconds",
         type=int,
-        default=0,
-        help="Per-model subprocess timeout. 0 means no wrapper timeout.",
+        default=60,
+        help="Per-model subprocess timeout in seconds (default 60). 0 disables.",
     )
     parser.add_argument(
         "--state-file",

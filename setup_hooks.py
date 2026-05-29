@@ -318,8 +318,9 @@ exit 127
 def create_claude_settings(claude_dir):
     """Merge the delegation guard PreToolUse hook into settings.json.
 
-    Works for both .claude/ and .Codex/ — derives the hook path from
-    the directory name so the command is always correct.
+    Registers the guard for both Bash and PowerShell matchers so it fires
+    regardless of which shell tool Claude uses. Derives the hook path from
+    the directory name (.claude or .Codex) so the command is always correct.
     """
     settings_path = claude_dir / "settings.json"
     hook_root = claude_dir.name  # ".claude" or ".Codex"
@@ -328,22 +329,13 @@ def create_claude_settings(claude_dir):
         if platform.system() == "Windows"
         else f"python3 {hook_root}/hooks/delegation_guard.py"
     )
-    guard_entry = {
-        "matcher": "Bash",
-        "hooks": [
-            {
-                "type": "command",
-                "command": command,
-                "timeout": 5,
-            }
-        ],
-    }
+    hook_def = {"type": "command", "command": command, "timeout": 5}
 
-    def is_delegation_guard_hook(hook):
+    def is_guard_hook(hook):
         if not isinstance(hook, dict):
             return False
-        command_text = hook.get("command", "")
-        return "delegation_guard.py" in command_text or "delegation_guard.ps1" in command_text
+        cmd = hook.get("command", "")
+        return "delegation_guard.py" in cmd or "delegation_guard.ps1" in cmd
 
     settings = {}
     if settings_path.exists():
@@ -351,7 +343,6 @@ def create_claude_settings(claude_dir):
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             settings = {}
-
     if not isinstance(settings, dict):
         settings = {}
 
@@ -365,53 +356,29 @@ def create_claude_settings(claude_dir):
         pre_tool_use = []
         hooks["PreToolUse"] = pre_tool_use
 
-    guard_count = 0
-    desired_guard_present = False
+    # Remove all existing guard hooks so we can re-add them cleanly
     for entry in pre_tool_use:
-        if not isinstance(entry, dict):
-            continue
-        for hook in entry.get("hooks", []):
-            if is_delegation_guard_hook(hook):
-                guard_count += 1
-                desired_guard_present = (
-                    desired_guard_present
-                    or entry.get("matcher") == "Bash"
-                    and hook == guard_entry["hooks"][0]
-                )
+        if isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
+            entry["hooks"] = [h for h in entry["hooks"] if not is_guard_hook(h)]
 
-    if guard_count == 1 and desired_guard_present:
-        print("[OK] CLAUDE settings already include delegation guard")
-        return
-
+    # Ensure both Bash and PowerShell matchers have the guard
+    matchers_needed = {"Bash", "PowerShell"}
     for entry in pre_tool_use:
-        if not isinstance(entry, dict):
-            continue
-        hooks_list = entry.get("hooks", [])
-        if isinstance(hooks_list, list):
-            entry["hooks"] = [
-                hook for hook in hooks_list
-                if not is_delegation_guard_hook(hook)
-            ]
+        if isinstance(entry, dict) and entry.get("matcher") in matchers_needed:
+            if isinstance(entry.get("hooks"), list):
+                entry["hooks"].append(hook_def)
+                matchers_needed.discard(entry["matcher"])
 
-    bash_entry = None
-    for entry in pre_tool_use:
-        if isinstance(entry, dict) and entry.get("matcher") == "Bash" and isinstance(entry.get("hooks"), list):
-            bash_entry = entry
-            break
-
-    if bash_entry is None:
-        bash_entry = {"matcher": "Bash", "hooks": []}
-        pre_tool_use.append(bash_entry)
+    for matcher in matchers_needed:
+        pre_tool_use.append({"matcher": matcher, "hooks": [hook_def]})
 
     if settings_path.exists():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = settings_path.with_name("settings.json.bak." + timestamp)
         shutil.copy2(settings_path, backup_path)
-        print("[OK] Backed up existing settings.json to " + backup_path.name)
 
-    bash_entry["hooks"].append(guard_entry["hooks"][0])
     settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    print("[OK] Updated .claude/settings.json delegation guard")
+    print("[OK] Updated " + hook_root + "/settings.json delegation guard (Bash + PowerShell)")
 
 
 def copy_hook_files(hooks_dir):

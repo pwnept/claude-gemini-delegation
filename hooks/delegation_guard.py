@@ -54,7 +54,7 @@ def main() -> int:
     except (json.JSONDecodeError, ValueError):
         return 0
 
-    if payload.get("tool_name") != "Bash":
+    if payload.get("tool_name") not in ("Bash", "PowerShell"):
         return 0
 
     command = payload.get("tool_input", {}).get("command", "")

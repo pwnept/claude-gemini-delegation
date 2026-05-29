@@ -136,17 +136,28 @@ def main():
         max_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 10
         task_context = sys.argv[3] if len(sys.argv) > 3 else "unknown"
     
-    # Prefer .gemini-delegation/ for metrics; fall back to .claude/.
-    current_dir = Path.cwd()
+    # Determine metrics directory
     agent_dir = None
-    for directory in (current_dir, *current_dir.parents):
-        for name in (".gemini-delegation", ".claude"):
-            candidate = directory / name
-            if candidate.exists():
-                agent_dir = candidate
+    current_dir = Path.cwd()
+
+    # 1. Respect DELEGATION_HOOK_PREFIX env var set by per-env shim
+    hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
+    if hook_prefix:
+        prefix_path = Path(hook_prefix)
+        if prefix_path.parent.name in (".claude", ".Codex"):
+            agent_dir = prefix_path.parent
+
+    # 2. Search up the tree (.gemini-delegation preferred over .claude)
+    if agent_dir is None:
+        for directory in (current_dir, *current_dir.parents):
+            for name in (".gemini-delegation", ".claude"):
+                candidate = directory / name
+                if candidate.exists():
+                    agent_dir = candidate
+                    break
+            if agent_dir:
                 break
-        if agent_dir:
-            break
+
     if agent_dir is None:
         agent_dir = current_dir / ".gemini-delegation"
 
