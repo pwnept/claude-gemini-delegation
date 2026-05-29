@@ -63,8 +63,8 @@ function Resolve-ProjectDirectory {
 function Get-PythonCommand {
     $candidates = @(
         @{ Exe = "py"; Args = @("-3") },
-        @{ Exe = "python"; Args = @() },
-        @{ Exe = "python3"; Args = @() }
+        @{ Exe = "python3"; Args = @() },
+        @{ Exe = "python"; Args = @() }
     )
 
     foreach ($candidate in $candidates) {
@@ -99,14 +99,21 @@ function Test-DelegationInstall {
         ".claude\hooks\post_delegate.py",
         ".claude\hooks\analyze_metrics.py",
         ".claude\hooks\gemini_delegate.py",
+        ".claude\hooks\delegation_guard.py",
+        ".claude\hooks\delegation_guard.ps1",
+        ".claude\hooks\delegate_and_log.ps1",
         ".claude\hooks\delegate.ps1",
         ".claude\hooks\delegate.bat",
         ".claude\hooks\delegate",
+        ".claude\settings.json",
         ".Codex\delegation_config.json",
         ".Codex\hooks\pre_delegate.py",
         ".Codex\hooks\post_delegate.py",
         ".Codex\hooks\analyze_metrics.py",
         ".Codex\hooks\gemini_delegate.py",
+        ".Codex\hooks\delegation_guard.py",
+        ".Codex\hooks\delegation_guard.ps1",
+        ".Codex\hooks\delegate_and_log.ps1",
         ".Codex\hooks\delegate.ps1",
         ".Codex\hooks\delegate.bat",
         ".Codex\hooks\delegate"
@@ -137,6 +144,30 @@ function Test-DelegationInstall {
     $codexPromptText = $codexPrompt -join "`n"
     if ($LASTEXITCODE -ne 0 -or $codexPromptText -notmatch "Codex delegation smoke test") {
         throw "Codex PowerShell delegation wrapper smoke test failed."
+    }
+
+    $guard = Join-Path $TargetDir ".claude\hooks\delegation_guard.ps1"
+    $guardArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $guard)
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        '{"tool_name":"Bash","tool_input":{"command":"npm ls"}}' | powershell @guardArgs 2>$null | Out-Null
+        $blockedExitCode = $LASTEXITCODE
+
+        '{"tool_name":"Bash","tool_input":{"command":"git status --short"}}' | powershell @guardArgs 2>$null | Out-Null
+        $allowedExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($blockedExitCode -ne 2) {
+        throw "Claude delegation guard did not block a known delegation command."
+    }
+
+    if ($allowedExitCode -ne 0) {
+        throw "Claude delegation guard blocked a safe non-delegation command."
     }
 }
 

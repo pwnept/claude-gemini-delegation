@@ -69,6 +69,9 @@ def copy_hook_files(dest_dir: Path):
         "post_delegate.py",
         "analyze_metrics.py",
         "gemini_delegate.py",
+        "delegation_guard.py",
+        "delegation_guard.ps1",
+        "delegate_and_log.ps1",
     ]
     
     copied_count = 0
@@ -120,7 +123,35 @@ python3 "$SCRIPT_DIR/pre_delegate.py" "$@"
     wrapper_bat = hooks_dir / "delegate.bat"
     wrapper_bat.write_text("""@echo off
 REM Delegation wrapper script
-python "%~dp0pre_delegate.py" %*
+where py >nul 2>nul
+if %errorlevel%==0 (
+  py -3 -c "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)" >nul 2>nul
+  if %errorlevel%==0 (
+    py -3 "%~dp0pre_delegate.py" %*
+    exit /b %errorlevel%
+  )
+)
+
+where python3 >nul 2>nul
+if %errorlevel%==0 (
+  python3 -c "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)" >nul 2>nul
+  if %errorlevel%==0 (
+    python3 "%~dp0pre_delegate.py" %*
+    exit /b %errorlevel%
+  )
+)
+
+where python >nul 2>nul
+if %errorlevel%==0 (
+  python -c "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)" >nul 2>nul
+  if %errorlevel%==0 (
+    python "%~dp0pre_delegate.py" %*
+    exit /b %errorlevel%
+  )
+)
+
+echo Python 3 was not found. Install Python 3.6+ or ensure py -3/python3 is on PATH. 1>&2
+exit /b 127
 """, encoding="utf-8")
     print_success("Created Windows wrapper: delegate.bat")
     
@@ -128,9 +159,124 @@ python "%~dp0pre_delegate.py" %*
     wrapper_ps1 = hooks_dir / "delegate.ps1"
     wrapper_ps1.write_text("""# Delegation wrapper script
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-python "$ScriptDir/pre_delegate.py" $args
+$PythonCommands = @(
+    @{ Command = "py"; Prefix = @("-3") },
+    @{ Command = "python3"; Prefix = @() },
+    @{ Command = "python"; Prefix = @() }
+)
+
+foreach ($Python in $PythonCommands) {
+    if (-not (Get-Command $Python.Command -ErrorAction SilentlyContinue)) {
+        continue
+    }
+
+    & $Python.Command @($Python.Prefix + @("-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)")) *> $null
+    if ($LASTEXITCODE -ne 0) {
+        continue
+    }
+
+    & $Python.Command @($Python.Prefix + @("$ScriptDir/pre_delegate.py") + $args)
+    exit $LASTEXITCODE
+}
+
+Write-Error "Python 3 was not found. Install Python 3.6+ or ensure py -3/python3 is on PATH."
+exit 127
 """, encoding="utf-8")
     print_success("Created PowerShell wrapper: delegate.ps1")
+
+
+def create_claude_settings(base_dir: Path):
+    """Merge the delegation guard PreToolUse hook into .claude/settings.json."""
+    settings_path = base_dir / "settings.json"
+    command = (
+        "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/delegation_guard.ps1"
+        if os.name == "nt"
+        else "python3 .claude/hooks/delegation_guard.py"
+    )
+    guard_entry = {
+        "matcher": "Bash",
+        "hooks": [
+            {
+                "type": "command",
+                "command": command,
+                "timeout": 5,
+            }
+        ],
+    }
+
+    def is_delegation_guard_hook(hook: Dict) -> bool:
+        if not isinstance(hook, dict):
+            return False
+        command_text = hook.get("command", "")
+        return "delegation_guard.py" in command_text or "delegation_guard.ps1" in command_text
+
+    settings = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            settings = {}
+
+    if not isinstance(settings, dict):
+        settings = {}
+
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        settings["hooks"] = hooks
+
+    pre_tool_use = hooks.setdefault("PreToolUse", [])
+    if not isinstance(pre_tool_use, list):
+        pre_tool_use = []
+        hooks["PreToolUse"] = pre_tool_use
+
+    guard_count = 0
+    desired_guard_present = False
+    for entry in pre_tool_use:
+        if not isinstance(entry, dict):
+            continue
+        for hook in entry.get("hooks", []):
+            if is_delegation_guard_hook(hook):
+                guard_count += 1
+                desired_guard_present = (
+                    desired_guard_present
+                    or entry.get("matcher") == "Bash"
+                    and hook == guard_entry["hooks"][0]
+                )
+
+    if guard_count == 1 and desired_guard_present:
+        print_success("CLAUDE settings already include delegation guard")
+        return
+
+    for entry in pre_tool_use:
+        if not isinstance(entry, dict):
+            continue
+        hooks_list = entry.get("hooks", [])
+        if isinstance(hooks_list, list):
+            entry["hooks"] = [
+                hook for hook in hooks_list
+                if not is_delegation_guard_hook(hook)
+            ]
+
+    bash_entry = None
+    for entry in pre_tool_use:
+        if isinstance(entry, dict) and entry.get("matcher") == "Bash" and isinstance(entry.get("hooks"), list):
+            bash_entry = entry
+            break
+
+    if bash_entry is None:
+        bash_entry = {"matcher": "Bash", "hooks": []}
+        pre_tool_use.append(bash_entry)
+
+    if settings_path.exists():
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = settings_path.with_name(f"settings.json.bak.{timestamp}")
+        shutil.copy2(settings_path, backup_path)
+        print_info(f"Backed up existing settings.json to {backup_path.name}")
+
+    bash_entry["hooks"].append(guard_entry["hooks"][0])
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    print_success("Updated .claude/settings.json delegation guard")
 
 
 def build_routing_presets(config: Dict) -> Dict:
@@ -190,7 +336,7 @@ def create_enhanced_claude_md(config: Dict, presets: Dict, base_dir: Path):
 
 ## Delegation Status
 
-No external CLIs configured. Run `python setup.py` to enable delegation.
+No external CLIs configured. Run `python3 setup.py` (or `py -3 setup.py` on Windows) to enable delegation.
 """
     else:
         cli_list = "\n".join([
@@ -237,13 +383,16 @@ gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 **Windows (PowerShell):**
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
-$prompt | python .claude/hooks/gemini_delegate.py
+$prompt | py -3 .claude/hooks/gemini_delegate.py
+
+# Or run the full prompt -> Gemini -> validation/metrics pipeline:
+.claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
 ```
 
 **Windows (CMD):**
 ```cmd
 FOR /F "delims=" %i IN ('.claude\\hooks\\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
-echo %PROMPT% | python .claude\\hooks\\gemini_delegate.py
+echo %PROMPT% | py -3 .claude\\hooks\\gemini_delegate.py
 ```
 
 ## Subagent Policy
@@ -275,6 +424,10 @@ subagents by name.
 4. **Execute with Gemini CLI** - Use `gemini_delegate.py`, not Claude subagents
 5. **Validate response** - Check quality with the post-delegation hook
 
+`.claude/settings.json` registers a PreToolUse Bash guard that blocks known
+high-output commands and returns delegation instructions. The guard is a
+backstop; still delegate proactively when the task matches these rules.
+
 ## Routing Examples
 
 ### Security Audit
@@ -295,7 +448,10 @@ gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 ### Research / Documentation / Web Search
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "find current docs for deployment limits" "Research task"
-$prompt | python .claude/hooks/gemini_delegate.py --profile research
+$prompt | py -3 .claude/hooks/gemini_delegate.py --profile research
+
+# Or:
+.claude/hooks/delegate_and_log.ps1 "find current docs for deployment limits" "Research task" 10 -Profile research
 ```
 
 ## Weekly Maintenance
@@ -326,7 +482,7 @@ This will let you enable/disable CLIs.
         existing = claude_md.read_text(encoding="utf-8")
         if MARKER_BEGIN in existing and MARKER_END in existing:
             before = existing[:existing.index(MARKER_BEGIN)]
-            after = existing[existing.index(MARKER_END) + len(MARKER_END):]
+            after = existing[existing.index(MARKER_END) + len(MARKER_END):].lstrip("\n")
             new_content = before + managed_section + after
             print_info("Updated existing delegation section in CLAUDE.md")
         else:
@@ -353,7 +509,7 @@ def create_usage_examples(config: Dict, base_dir: Path):
 # Basic delegation example
 
 # 1. Generate optimized prompt
-PROMPT=$(python ../{hook_root}/hooks/pre_delegate.py \
+PROMPT=$(python3 ../{hook_root}/hooks/pre_delegate.py \
   "npm ls --depth=0" \
   "Investigating build performance")
 
@@ -367,7 +523,7 @@ echo "Executing with Gemini..."
 
 # 3. Validate response (after execution)
 # RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
-# python ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 10 "build-analysis"
+# python3 ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 10 "build-analysis"
 """, encoding="utf-8")
     
     if os.name != 'nt':
@@ -381,7 +537,7 @@ echo "Executing with Gemini..."
 # Security audit example - delegates to Gemini
 
 # Run security scan on source files
-PROMPT=$(python ../{hook_root}/hooks/pre_delegate.py \
+PROMPT=$(python3 ../{hook_root}/hooks/pre_delegate.py \
   "grep -r 'password' src/ && grep -r 'api.*key' src/" \
   "Pre-deployment security audit" \
   8)
@@ -390,7 +546,7 @@ echo "Running security audit..."
 RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
 
 # Validate and save results
-python ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 8 "security-audit"
+python3 ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 8 "security-audit"
 
 echo "$RESPONSE" > security-audit-results.txt
 echo "Results saved to security-audit-results.txt"
@@ -414,12 +570,19 @@ def verify_installation(base_dir: Path, config: Dict) -> bool:
         (base_dir / "hooks" / "post_delegate.py", "Post-delegation hook"),
         (base_dir / "hooks" / "analyze_metrics.py", "Metrics analyzer"),
         (base_dir / "hooks" / "gemini_delegate.py", "Gemini fallback runner"),
+        (base_dir / "hooks" / "delegation_guard.py", "Delegation guard"),
+        (base_dir / "hooks" / "delegation_guard.ps1", "Delegation guard PowerShell launcher"),
+        (base_dir / "hooks" / "delegate_and_log.ps1", "Full PowerShell delegation pipeline"),
         (base_dir / "delegation_config.json", "Configuration file"),
         (base_dir / "CLAUDE.md", "Claude configuration"),
+        (base_dir / "settings.json", "Claude settings delegation guard"),
         (codex_dir / "hooks" / "pre_delegate.py", "Codex pre-delegation hook"),
         (codex_dir / "hooks" / "post_delegate.py", "Codex post-delegation hook"),
         (codex_dir / "hooks" / "analyze_metrics.py", "Codex metrics analyzer"),
         (codex_dir / "hooks" / "gemini_delegate.py", "Codex Gemini fallback runner"),
+        (codex_dir / "hooks" / "delegation_guard.py", "Codex delegation guard"),
+        (codex_dir / "hooks" / "delegation_guard.ps1", "Codex delegation guard PowerShell launcher"),
+        (codex_dir / "hooks" / "delegate_and_log.ps1", "Codex full PowerShell delegation pipeline"),
         (codex_dir / "delegation_config.json", "Codex configuration file"),
         (agents_md, "AGENTS.md delegation instructions"),
         (root_claude_md, "Root CLAUDE.md bridge"),
@@ -459,7 +622,7 @@ def show_next_steps(config: Dict):
     
     print(f"{Colors.BOLD}1. Test the hooks:{Colors.END}")
     if os.name == "nt":
-        print("   python .claude\\hooks\\pre_delegate.py \"test task\" \"test context\"")
+        print("   py -3 .claude\\hooks\\pre_delegate.py \"test task\" \"test context\"")
     else:
         print("   python3 .claude/hooks/pre_delegate.py \"test task\" \"test context\"")
     
@@ -470,7 +633,8 @@ def show_next_steps(config: Dict):
         if os.name == "nt":
             print("   $prompt = & .claude\\hooks\\delegate.ps1 \"npm ls\" \"Test\"")
             if first_cli == "gemini":
-                print("   $prompt | python .claude\\hooks\\gemini_delegate.py")
+                print("   $prompt | py -3 .claude\\hooks\\gemini_delegate.py")
+                print("   .claude\\hooks\\delegate_and_log.ps1 \"npm ls\" \"Test\" 5")
             else:
                 print(f"   # Send $prompt to {first_cli_cmd} using that CLI's prompt option")
         else:
@@ -488,8 +652,8 @@ def show_next_steps(config: Dict):
     
     print(f"\n{Colors.BOLD}5. Monitor metrics:{Colors.END}")
     if os.name == "nt":
-        print("   python .claude\\hooks\\analyze_metrics.py")
-        print("   python .Codex\\hooks\\analyze_metrics.py")
+        print("   py -3 .claude\\hooks\\analyze_metrics.py")
+        print("   py -3 .Codex\\hooks\\analyze_metrics.py")
     else:
         print("   python3 .claude/hooks/analyze_metrics.py")
         print("   python3 .Codex/hooks/analyze_metrics.py")
@@ -573,6 +737,7 @@ def main():
     
     # Create wrappers
     create_wrapper_scripts(hooks_dir)
+    create_claude_settings(base_dir)
     
     # Generate config
     config = generate_delegation_config(configured)

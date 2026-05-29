@@ -69,7 +69,7 @@ python3 setup.py --target /path/to/your/project
 On Windows without the PowerShell helper:
 
 ```powershell
-python setup.py --target "C:\path\to\your\project"
+py -3 setup.py --target "C:\path\to\your\project"
 ```
 
 To install into the current working directory, run:
@@ -87,7 +87,9 @@ python3 setup.py --all-clis
 
 On Windows, generated examples use `gemini_delegate.py`, which calls
 `gemini.cmd` and falls back across the stable Gemini 2.5 Flash, Flash Lite,
-and Pro model pools when Gemini reports capacity or 429 errors.
+and Pro model pools when Gemini reports capacity or 429 errors. Windows
+wrappers resolve Python 3 explicitly (`py -3`, then `python3`, then a verified
+Python 3 `python`) so machines with Python 2 on `PATH` do not silently break.
 
 #### Option C: Repeat for Another Project
 
@@ -117,8 +119,9 @@ The installer configures:
 2. **AGENTS.md** - Preserved project rules plus the managed delegation section
 3. **.claude/CLAUDE.md** - Generated Claude Code delegation reference
 4. **.claude/hooks** - Claude Code wrapper hooks
-5. **.Codex/hooks** - Codex wrapper hooks
-6. **delegation_config.json** - Enabled CLI configuration in both hook roots
+5. **.claude/settings.json** - Claude Code PreToolUse guard for known high-output Bash commands
+6. **.Codex/hooks** - Codex wrapper hooks
+7. **delegation_config.json** - Enabled CLI configuration in both hook roots
 
 ### Optional: Delegation Hooks
 
@@ -131,11 +134,15 @@ python3 setup_hooks.py
 # - pre_delegate.py (prompt formatter)
 # - post_delegate.py (response validator)
 # - analyze_metrics.py (usage analyzer)
+# - gemini_delegate.py (Gemini model fallback runner)
+# - delegate_and_log.ps1 (PowerShell full pipeline with metrics)
+# - delegation_guard.py / .ps1 (Claude Code PreToolUse guard)
 ```
 
-**Note:** The generated instructions are the main routing control. The hooks
-make delegation easier and provide validation/metrics, but they do not modify
-Claude model settings.
+**Note:** The generated instructions are the main routing control. The Claude
+Code PreToolUse guard is a backstop for obvious high-output Bash commands; it
+does not replace proactive delegation for broad analysis, docs lookup, or
+multi-file reading.
 
 ---
 
@@ -248,6 +255,7 @@ python3 setup_hooks.py
 # - Automatic prompt formatting
 # - Response validation
 # - Usage metrics tracking
+# - Optional Claude Code Bash guard enforcement
 ```
 
 ---
@@ -300,6 +308,16 @@ For better results, provide context in your requests:
 
 ```
 User: "We're deploying tomorrow. Scan @src/ for hardcoded credentials and API keys. Use Gemini."
+```
+
+### PowerShell Full Pipeline
+
+On Windows, use `delegate_and_log.ps1` when you want prompt formatting,
+Gemini fallback, response validation, and metrics in one command:
+
+```powershell
+.claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+.claude/hooks/delegate_and_log.ps1 "find current docs for Next.js deployment limits" "Research task" 10 -Profile research
 ```
 
 ### Weekly Metrics (If Hooks Installed)
@@ -369,6 +387,17 @@ export GEMINI_API_KEY="your-key-here"
 # Add to ~/.bashrc or ~/.zshrc for persistence
 ```
 
+### Windows Uses Python 2
+
+**Problem:** `python` resolves to Python 2 and hook scripts fail with syntax errors.
+
+**Solution:** Re-run the installer so wrappers use the Python 3 resolver, or call
+Python scripts with `py -3` manually:
+
+```powershell
+py -3 .claude/hooks/pre_delegate.py "npm ls" "Build analysis" 5
+```
+
 ### Bridge Not Loading
 
 **Problem:** Claude reads root `CLAUDE.md` but delegation rules do not apply.
@@ -406,7 +435,10 @@ claude-gemini-delegation/
 |   |-- pre_delegate.py
 |   |-- post_delegate.py
 |   |-- analyze_metrics.py
-|   `-- gemini_delegate.py
+|   |-- gemini_delegate.py
+|   |-- delegation_guard.py
+|   |-- delegation_guard.ps1
+|   `-- delegate_and_log.ps1
 |-- tests/
 |   |-- test_install.py
 |   `-- regression/

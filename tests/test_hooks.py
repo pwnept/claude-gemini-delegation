@@ -3,9 +3,12 @@ Unit tests for delegation hooks.
 Run with: python -m unittest discover tests
 """
 
+import io
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Add hooks to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
@@ -13,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 from pre_delegate import detect_task_type, estimate_compression, build_prompt
 from post_delegate import count_lines, estimate_tokens, validate_response
 from analyze_metrics import parse_csv_line
+import delegation_guard
 
 
 class TestPreDelegate(unittest.TestCase):
@@ -82,6 +86,34 @@ class TestAnalyzeMetrics(unittest.TestCase):
     def test_parse_csv_line_with_comma_in_task(self):
         parsed = parse_csv_line('2026-05-06 10:00:00,"task, with comma",3,20')
         self.assertEqual(parsed, ("2026-05-06 10:00:00", "task, with comma", 3, 20))
+
+
+class TestDelegationGuard(unittest.TestCase):
+    """Test Claude Code PreToolUse guard routing."""
+
+    def run_guard(self, payload):
+        stdin = io.StringIO(json.dumps(payload))
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stdin", stdin):
+            with mock.patch.object(sys, "stderr", stderr):
+                code = delegation_guard.main()
+        return code, stderr.getvalue()
+
+    def test_blocks_verbose_bash_command(self):
+        code, stderr = self.run_guard(
+            {"tool_name": "Bash", "tool_input": {"command": "npm ls"}}
+        )
+
+        self.assertEqual(code, 2)
+        self.assertIn("delegation pattern", stderr)
+
+    def test_allows_safe_bash_command(self):
+        code, stderr = self.run_guard(
+            {"tool_name": "Bash", "tool_input": {"command": "git status --short"}}
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
 
 
 if __name__ == "__main__":

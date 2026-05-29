@@ -197,18 +197,22 @@ Use delegation for token-heavy or broad read-only work:
 
 Claude Code wrapper:
 ```powershell
-$prompt = & .claude/hooks/delegate.ps1 "analyze @src/ for performance issues" "Optimization task"
-$prompt | python .claude/hooks/gemini_delegate.py
+.claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 ```
 
 Codex wrapper:
 ```powershell
-$prompt = & .Codex/hooks/delegate.ps1 "analyze @src/ for performance issues" "Optimization task"
-$prompt | python .Codex/hooks/gemini_delegate.py
+.Codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 ```
 
+The PowerShell wrappers resolve Python 3 explicitly (`py -3`, then `python3`,
+then a verified Python 3 `python`) so they do not accidentally run Python 2.
+
 For documentation lookup or web search, add `--profile research` when piping
-to `gemini_delegate.py`.
+to `gemini_delegate.py` or `-Profile research` when using `delegate_and_log.ps1`.
+
+Claude Code also installs `.claude/settings.json` with a PreToolUse guard that
+blocks known high-output Bash commands and tells Claude to delegate them.
 
 Keep project-specific agent instructions outside this managed section. Rerunning
 setup updates only this block.

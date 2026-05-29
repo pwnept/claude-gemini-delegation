@@ -3,6 +3,9 @@ Unit tests for installer CLI selection.
 Run with: python -m unittest discover tests
 """
 
+import importlib
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -19,6 +22,8 @@ from install import (
     ensure_root_claude_bridge,
     interactive_selection,
 )
+
+enhanced_setup = importlib.import_module("setup")
 
 
 def fake_discovered():
@@ -193,6 +198,71 @@ class TestAgentsMd(unittest.TestCase):
             content = agents_md.read_text(encoding="utf-8")
             self.assertNotIn("also loads `.claude/CLAUDE.md`", content)
             self.assertIn(AGENTS_MARKER_BEGIN, content)
+
+
+class TestClaudeSettings(unittest.TestCase):
+    def expected_guard_fragment(self):
+        return "delegation_guard.ps1" if os.name == "nt" else "delegation_guard.py"
+
+    def guard_hooks(self, settings):
+        pre_tool_use = settings.get("hooks", {}).get("PreToolUse", [])
+        hooks = []
+        for entry in pre_tool_use:
+            for hook in entry.get("hooks", []):
+                command = hook.get("command", "")
+                if "delegation_guard.py" in command or "delegation_guard.ps1" in command:
+                    hooks.append((entry, hook))
+        return hooks
+
+    def test_create_claude_settings_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+
+            enhanced_setup.create_claude_settings(claude_dir)
+            enhanced_setup.create_claude_settings(claude_dir)
+
+            settings = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+            hooks = self.guard_hooks(settings)
+            self.assertEqual(len(hooks), 1)
+            self.assertEqual(hooks[0][0]["matcher"], "Bash")
+            self.assertIn(self.expected_guard_fragment(), hooks[0][1]["command"])
+            self.assertEqual(len(list(claude_dir.glob("settings.json.bak.*"))), 0)
+
+    def test_create_claude_settings_migrates_old_python_guard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+            settings_path = claude_dir / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Bash",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": "python .claude/hooks/delegation_guard.py",
+                                            "timeout": 5,
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            enhanced_setup.create_claude_settings(claude_dir)
+
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            hooks = self.guard_hooks(settings)
+            self.assertEqual(len(hooks), 1)
+            self.assertIn(self.expected_guard_fragment(), hooks[0][1]["command"])
+            self.assertEqual(len(list(claude_dir.glob("settings.json.bak.*"))), 1)
 
 
 if __name__ == "__main__":
