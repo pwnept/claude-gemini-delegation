@@ -52,16 +52,20 @@ CAPACITY_PATTERNS = (
 )
 
 
-def find_claude_dir(start: Path) -> Path:
-    current = start.resolve()
-    candidate = current / ".claude"
-    if candidate.exists():
-        return candidate
+def find_agent_dir(start: Path) -> Path:
+    # Use the script's own parent dir (.claude or .Codex) when available so
+    # each environment gets isolated metrics/state rather than both writing
+    # to .claude/.
+    script_parent = Path(__file__).resolve().parent.parent
+    if script_parent.name in (".claude", ".Codex"):
+        return script_parent
 
-    for parent in current.parents:
-        candidate = parent / ".claude"
-        if candidate.exists():
-            return candidate
+    current = start.resolve()
+    for directory in (current, *current.parents):
+        for name in (".claude", ".Codex"):
+            candidate = directory / name
+            if candidate.exists():
+                return candidate
 
     return current / ".claude"
 
@@ -205,7 +209,7 @@ def main() -> int:
         print("No models configured.", file=sys.stderr)
         return 2
 
-    claude_dir = find_claude_dir(Path.cwd())
+    claude_dir = find_agent_dir(Path.cwd())
     state_path = Path(args.state_file) if args.state_file else claude_dir / "metrics" / "gemini_model_state.json"
     state = {"cooldowns": {}} if args.no_state else load_state(state_path)
     now = time.time()

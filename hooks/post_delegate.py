@@ -54,8 +54,8 @@ def validate_response(response: str, max_lines: int) -> Tuple[bool, list]:
         warnings.append("   Suggestion: Check if Gemini understood the task")
     
     # Check token efficiency
-    if token_estimate > 250:
-        warnings.append(f"⚠️  WARNING: Response uses ~{token_estimate} tokens (>250)")
+    if token_estimate > 1000:
+        warnings.append(f"⚠️  WARNING: Response uses ~{token_estimate} tokens (>1000)")
         warnings.append("   Suggestion: Refine prompt compression directives")
     
     # Success message if no warnings
