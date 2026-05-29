@@ -33,13 +33,15 @@ PATTERNS = [
     (re.compile(r"\bpip\s+install\b.*--dry"), "pip dry-run"),
 ]
 
-GUIDANCE = f"""This command matches a delegation pattern. Use Gemini instead:
+GUIDANCE = f"""This command matches a delegation pattern. Use Gemini instead.
 
-PowerShell:
+IMPORTANT: Use the PowerShell tool — NOT the Bash tool. Bash routes to Git Bash on Windows and cannot run .ps1 scripts.
+
+PowerShell tool:
   $prompt = & {_HOOK_PREFIX}/delegate.ps1 "<task>" "<context>"
   $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 
-Or with validation/metrics:
+Or with validation/metrics (PowerShell tool):
   & {_HOOK_PREFIX}/delegate_and_log.ps1 "<task>" "<context>" 10
 
 Add -Profile research for documentation lookup or web search.

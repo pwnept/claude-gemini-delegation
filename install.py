@@ -198,21 +198,23 @@ Use delegation for token-heavy or broad read-only work:
 - Documentation lookup or web search
 - Broad codebase analysis, performance review, or inspection tasks
 
-Claude Code wrapper:
+**On Windows always use the PowerShell tool — not Bash.** Git Bash cannot
+run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(...)`.
+
+Claude Code (PowerShell tool):
 ```powershell
-.claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+& .claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 ```
 
-Codex wrapper:
+Codex (PowerShell tool):
 ```powershell
-.Codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+& .Codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 ```
+
+For documentation lookup or web search, add `-Profile research`.
 
 The PowerShell wrappers resolve Python 3 explicitly (`py -3`, then `python3`,
 then a verified Python 3 `python`) so they do not accidentally run Python 2.
-
-For documentation lookup or web search, add `--profile research` when piping
-to `gemini_delegate.py` or `-Profile research` when using `delegate_and_log.ps1`.
 
 Claude Code also installs `.claude/settings.json` with a PreToolUse guard that
 blocks known high-output Bash commands and tells Claude to delegate them.

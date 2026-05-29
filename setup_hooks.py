@@ -559,19 +559,22 @@ Only use Claude subagents when the user explicitly asks for Claude subagents by 
 
 ### Quick Delegation
 
-**Windows (PowerShell):**
+**On Windows always use the PowerShell tool — not Bash.** Git Bash cannot
+run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(...)`.
+
+**Windows (PowerShell tool):**
 ```powershell
 # Claude Code hook
-.claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+& .claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 
 # Codex hook
-.Codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+& .Codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 
 # Research profile (Gemini Pro before Flash)
-.claude/hooks/delegate_and_log.ps1 "find docs for X" "Research task" 10 -Profile research
+& .claude/hooks/delegate_and_log.ps1 "find docs for X" "Research task" 10 -Profile research
 ```
 
-**Unix/Mac:**
+**Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
 gemini --model """ + DEFAULT_GEMINI_MODEL + """ -p "$PROMPT"

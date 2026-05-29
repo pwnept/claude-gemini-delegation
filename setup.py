@@ -528,27 +528,23 @@ aider -p "$PROMPT"
 
 ## Quick Delegation
 
-Use the wrapper scripts for easy delegation:
+**On Windows always use the PowerShell tool — not Bash.** Git Bash cannot run `.ps1`
+scripts. When generating commands, use `PowerShell(...)` not `Bash(...)`.
 
-**Unix/Mac:**
+**Windows (PowerShell tool):**
+```powershell
+# Full pipeline with validation/metrics:
+& .claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+
+# Or step by step:
+$prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
+$prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
+```
+
+**Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
 gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
-```
-
-**Windows (PowerShell):**
-```powershell
-$prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
-$prompt | py -3 .claude/hooks/gemini_delegate.py
-
-# Or run the full prompt -> Gemini -> validation/metrics pipeline:
-.claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
-```
-
-**Windows (CMD):**
-```cmd
-FOR /F "delims=" %i IN ('.claude\\hooks\\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
-echo %PROMPT% | py -3 .claude\\hooks\\gemini_delegate.py
 ```
 
 ## Subagent Policy
@@ -718,13 +714,16 @@ Only use Claude subagents when the user explicitly asks for Claude subagents by 
 
 ### Quick Delegation
 
-**Windows (PowerShell):**
+**On Windows always use the PowerShell tool — not Bash.** Git Bash cannot
+run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(...)`.
+
+**Windows (PowerShell tool):**
 ```powershell
-.claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
-.claude/hooks/delegate_and_log.ps1 "find current docs for X" "Research task" 10 -Profile research
+& .claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+& .claude/hooks/delegate_and_log.ps1 "find current docs for X" "Research task" 10 -Profile research
 ```
 
-**Unix/Mac:**
+**Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
 gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
