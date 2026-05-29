@@ -57,6 +57,7 @@ def print_info(text: str):
 SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+ROOT_CLAUDE_IMPORTS = ("@AGENTS.md",)
 
 
 def copy_hook_files(dest_dir: Path):
@@ -317,7 +318,7 @@ This will let you enable/disable CLIs.
     managed_section = f"{MARKER_BEGIN}\n{managed_body.strip()}\n{MARKER_END}\n"
 
     if claude_md.exists():
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = claude_md.with_name(f"CLAUDE.md.bak.{timestamp}")
         shutil.copy2(claude_md, backup_path)
         print_info(f"Backed up existing CLAUDE.md to {backup_path.name}")
@@ -340,7 +341,8 @@ This will let you enable/disable CLIs.
 
 def create_usage_examples(config: Dict, base_dir: Path):
     """Create example scripts showing delegation usage."""
-    print_header("Creating Usage Examples")
+    hook_root = base_dir.name
+    print_header(f"Creating Usage Examples in {hook_root}")
     
     examples_dir = base_dir / "examples"
     examples_dir.mkdir(exist_ok=True)
@@ -351,7 +353,7 @@ def create_usage_examples(config: Dict, base_dir: Path):
 # Basic delegation example
 
 # 1. Generate optimized prompt
-PROMPT=$(python ../.claude/hooks/pre_delegate.py \
+PROMPT=$(python ../{hook_root}/hooks/pre_delegate.py \
   "npm ls --depth=0" \
   "Investigating build performance")
 
@@ -365,7 +367,7 @@ echo "Executing with Gemini..."
 
 # 3. Validate response (after execution)
 # RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
-# python ../.claude/hooks/post_delegate.py "$RESPONSE" 10 "build-analysis"
+# python ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 10 "build-analysis"
 """, encoding="utf-8")
     
     if os.name != 'nt':
@@ -379,7 +381,7 @@ echo "Executing with Gemini..."
 # Security audit example - delegates to Gemini
 
 # Run security scan on source files
-PROMPT=$(python ../.claude/hooks/pre_delegate.py \
+PROMPT=$(python ../{hook_root}/hooks/pre_delegate.py \
   "grep -r 'password' src/ && grep -r 'api.*key' src/" \
   "Pre-deployment security audit" \
   8)
@@ -388,7 +390,7 @@ echo "Running security audit..."
 RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
 
 # Validate and save results
-python ../.claude/hooks/post_delegate.py "$RESPONSE" 8 "security-audit"
+python ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 8 "security-audit"
 
 echo "$RESPONSE" > security-audit-results.txt
 echo "Results saved to security-audit-results.txt"
@@ -403,6 +405,8 @@ echo "Results saved to security-audit-results.txt"
 def verify_installation(base_dir: Path, config: Dict) -> bool:
     """Verify that installation was successful."""
     print_header("Verifying Installation")
+    codex_dir = base_dir.parent / ".Codex"
+    agents_md = base_dir.parent / "AGENTS.md"
     root_claude_md = base_dir.parent / "CLAUDE.md"
     
     checks = [
@@ -412,6 +416,12 @@ def verify_installation(base_dir: Path, config: Dict) -> bool:
         (base_dir / "hooks" / "gemini_delegate.py", "Gemini fallback runner"),
         (base_dir / "delegation_config.json", "Configuration file"),
         (base_dir / "CLAUDE.md", "Claude configuration"),
+        (codex_dir / "hooks" / "pre_delegate.py", "Codex pre-delegation hook"),
+        (codex_dir / "hooks" / "post_delegate.py", "Codex post-delegation hook"),
+        (codex_dir / "hooks" / "analyze_metrics.py", "Codex metrics analyzer"),
+        (codex_dir / "hooks" / "gemini_delegate.py", "Codex Gemini fallback runner"),
+        (codex_dir / "delegation_config.json", "Codex configuration file"),
+        (agents_md, "AGENTS.md delegation instructions"),
         (root_claude_md, "Root CLAUDE.md bridge"),
     ]
     
@@ -424,10 +434,11 @@ def verify_installation(base_dir: Path, config: Dict) -> bool:
             all_passed = False
 
     if root_claude_md.exists():
-        if root_claude_md.read_text(encoding="utf-8") == "@AGENTS.md\n":
+        root_lines = root_claude_md.read_text(encoding="utf-8").splitlines()
+        if root_lines == list(ROOT_CLAUDE_IMPORTS):
             print_success("Root CLAUDE.md content: @AGENTS.md")
         else:
-            print_error("Root CLAUDE.md content is not exactly @AGENTS.md")
+            print_error("Root CLAUDE.md is not exactly @AGENTS.md")
             all_passed = False
     
     # Check if at least one CLI is enabled
@@ -473,13 +484,15 @@ def show_next_steps(config: Dict):
     print("   Your delegation configuration will be active")
     
     print(f"\n{Colors.BOLD}4. Review examples:{Colors.END}")
-    print("   Check .claude/examples/ for usage examples")
+    print("   Check .claude/examples/ and .Codex/examples/ for usage examples")
     
     print(f"\n{Colors.BOLD}5. Monitor metrics:{Colors.END}")
     if os.name == "nt":
         print("   python .claude\\hooks\\analyze_metrics.py")
+        print("   python .Codex\\hooks\\analyze_metrics.py")
     else:
         print("   python3 .claude/hooks/analyze_metrics.py")
+        print("   python3 .Codex/hooks/analyze_metrics.py")
 
 
 def main():
@@ -492,6 +505,8 @@ def main():
         setup_hooks,
         generate_delegation_config,
         save_config,
+        extract_migrated_claude_content,
+        ensure_agents_md,
         ensure_root_claude_bridge,
         install_not_found_clis
     )
@@ -568,10 +583,24 @@ def main():
     
     # Create enhanced CLAUDE.md
     create_enhanced_claude_md(config, presets, base_dir)
+    root_claude_md = base_dir.parent / "CLAUDE.md"
+    root_claude_existing = root_claude_md.read_text(encoding="utf-8") if root_claude_md.exists() else ""
+    ensure_agents_md(base_dir.parent, extract_migrated_claude_content(root_claude_existing))
     ensure_root_claude_bridge(base_dir.parent)
     
     # Create usage examples
     create_usage_examples(config, base_dir)
+
+    # Install a Codex hook mirror for workflows that expect .Codex/hooks.
+    codex_dir = base_dir.parent / ".Codex"
+    setup_hooks(codex_dir)
+    if HOOKS_SOURCE.exists():
+        if not copy_hook_files(codex_dir / "hooks"):
+            print_error("Codex hook installation failed - check that hooks/ directory exists")
+            sys.exit(1)
+    create_wrapper_scripts(codex_dir / "hooks")
+    save_config(config, codex_dir)
+    create_usage_examples(config, codex_dir)
     
     # Verify installation
     if not verify_installation(base_dir, config):

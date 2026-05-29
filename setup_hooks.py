@@ -30,6 +30,20 @@ MARKER_END = "> [claude-gemini-delegation:end]"
 SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+ROOT_CLAUDE_IMPORTS = ("@AGENTS.md",)
+LEGACY_ROOT_CLAUDE_IMPORTS = ("@AGENTS.md", "@.claude/CLAUDE.md")
+AGENTS_MARKER_BEGIN = "> [claude-gemini-delegation:agents-begin]"
+AGENTS_MARKER_END = "> [claude-gemini-delegation:agents-end]"
+MIGRATED_CLAUDE_MARKER_BEGIN = "> [claude-gemini-delegation:migrated-claude-begin]"
+MIGRATED_CLAUDE_MARKER_END = "> [claude-gemini-delegation:migrated-claude-end]"
+OLD_DEFAULT_AGENTS_TEXT = """# Agent Instructions
+
+Gemini delegation is installed locally in `.claude/hooks`.
+
+The root `CLAUDE.md` also loads `.claude/CLAUDE.md`; follow that generated
+configuration for delegation presets, wrapper usage, and Gemini fallback
+behavior.
+"""
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -195,8 +209,8 @@ name.
     managed_section = MARKER_BEGIN + "\n" + managed_body.strip() + "\n" + MARKER_END + "\n"
 
     if claude_md.exists():
-        unix_ts = int(datetime.datetime.now().timestamp())
-        backup_path = claude_md.with_name("global_claude_md_backup_" + str(unix_ts) + ".md")
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = claude_md.with_name("global_claude_md_backup_" + timestamp + ".md")
         shutil.copy2(claude_md, backup_path)
         print("[OK] Backed up existing CLAUDE.md to " + backup_path.name)
 
@@ -216,25 +230,141 @@ name.
     claude_md.write_text(new_content, encoding="utf-8")
 
 
+def build_root_claude_bridge(existing=""):
+    """Return the root CLAUDE.md bridge."""
+    return "@AGENTS.md\n"
+
+
+def extract_migrated_claude_content(existing=""):
+    """Return existing CLAUDE.md instructions after removing bridge imports."""
+    retained_lines = existing.splitlines()
+
+    while retained_lines and retained_lines[0].strip() in LEGACY_ROOT_CLAUDE_IMPORTS:
+        retained_lines.pop(0)
+    while retained_lines and not retained_lines[0].strip():
+        retained_lines.pop(0)
+    while retained_lines and not retained_lines[-1].strip():
+        retained_lines.pop()
+
+    if not retained_lines:
+        return ""
+    return "\n".join(retained_lines) + "\n"
+
+
 def ensure_root_claude_bridge(project_dir):
-    """Ensure project-level CLAUDE.md delegates to AGENTS.md."""
+    """Ensure project-level CLAUDE.md points only to AGENTS.md."""
     claude_md = project_dir / "CLAUDE.md"
-    desired_content = "@AGENTS.md\n"
+    existing = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
+    desired_content = build_root_claude_bridge(existing)
 
     if claude_md.exists():
-        existing = claude_md.read_text(encoding="utf-8")
         if existing == desired_content:
-            print("[OK] Root CLAUDE.md already points to AGENTS.md")
+            print("[OK] Root CLAUDE.md already includes delegation bridge")
             return claude_md
 
-        unix_ts = int(datetime.datetime.now().timestamp())
-        backup_path = claude_md.with_name("root_claude_md_backup_" + str(unix_ts) + ".md")
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = claude_md.with_name("root_claude_md_backup_" + timestamp + ".md")
         shutil.copy2(claude_md, backup_path)
         print("[OK] Backed up existing root CLAUDE.md to " + backup_path.name)
 
     claude_md.write_text(desired_content, encoding="utf-8")
-    print("[OK] Updated root CLAUDE.md to @AGENTS.md")
+    print("[OK] Updated root CLAUDE.md delegation bridge")
     return claude_md
+
+
+def build_agents_section():
+    """Return the managed AGENTS.md delegation section."""
+    body = """## Gemini Delegation
+
+Gemini delegation is installed locally in `.claude/hooks` and `.Codex/hooks`.
+
+Use delegation for token-heavy or broad read-only work:
+- Commands expected to produce more than 500 lines of output
+- `npm ls`, `pip list`, `pip freeze`, and verbose dependency listings
+- `git log` beyond 5 commits or broad git history analysis
+- Recursive searches such as `find`, `grep -r`, or repository-wide scans
+- Reading or analyzing 3 or more new files
+- Security audits, vulnerability scans, XSS/SQL injection/CSRF checks
+- Documentation lookup or web search
+- Broad codebase analysis, performance review, or inspection tasks
+
+Claude Code wrapper:
+```powershell
+$prompt = & .claude/hooks/delegate.ps1 "analyze @src/ for performance issues" "Optimization task"
+$prompt | python .claude/hooks/gemini_delegate.py
+```
+
+Codex wrapper:
+```powershell
+$prompt = & .Codex/hooks/delegate.ps1 "analyze @src/ for performance issues" "Optimization task"
+$prompt | python .Codex/hooks/gemini_delegate.py
+```
+
+For documentation lookup or web search, add `--profile research` when piping
+to `gemini_delegate.py`.
+
+Keep project-specific agent instructions outside this managed section. Rerunning
+setup updates only this block.
+"""
+    return AGENTS_MARKER_BEGIN + "\n" + body.strip() + "\n" + AGENTS_MARKER_END + "\n"
+
+
+def build_migrated_claude_section(content):
+    """Return a managed section containing prior root CLAUDE.md content."""
+    if not content.strip():
+        return ""
+
+    body = "## Migrated CLAUDE.md Instructions\n\n" + content.strip()
+    return MIGRATED_CLAUDE_MARKER_BEGIN + "\n" + body + "\n" + MIGRATED_CLAUDE_MARKER_END + "\n"
+
+
+def normalize_agents_content(existing):
+    """Remove obsolete generated boilerplate while preserving user content."""
+    normalized = existing.replace("\r\n", "\n").lstrip("\ufeff")
+    if normalized.startswith(OLD_DEFAULT_AGENTS_TEXT):
+        remainder = normalized[len(OLD_DEFAULT_AGENTS_TEXT):].lstrip("\n")
+        if remainder:
+            return "# Agent Instructions\n\n" + remainder
+        return "# Agent Instructions\n"
+    return normalized
+
+
+def ensure_agents_md(project_dir, migrated_claude_content=""):
+    """Ensure AGENTS.md exists without overwriting project-specific instructions."""
+    agents_md = project_dir / "AGENTS.md"
+    managed_section = build_agents_section()
+    migrated_section = build_migrated_claude_section(migrated_claude_content)
+
+    if agents_md.exists():
+        raw_existing = agents_md.read_text(encoding="utf-8")
+        existing = normalize_agents_content(raw_existing)
+        working = existing
+
+        if migrated_section and MIGRATED_CLAUDE_MARKER_BEGIN not in working:
+            working = working.rstrip("\n") + "\n\n" + migrated_section
+
+        if AGENTS_MARKER_BEGIN in existing and AGENTS_MARKER_END in existing:
+            before = working[:working.index(AGENTS_MARKER_BEGIN)]
+            after = working[working.index(AGENTS_MARKER_END) + len(AGENTS_MARKER_END):]
+            new_content = before + managed_section + after.lstrip("\n")
+        else:
+            new_content = working.rstrip("\n") + "\n\n" + managed_section
+
+        if new_content == raw_existing:
+            print("[OK] AGENTS.md already includes delegation section")
+            return agents_md
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = agents_md.with_name("AGENTS.md.bak." + timestamp)
+        shutil.copy2(agents_md, backup_path)
+        print("[OK] Backed up existing AGENTS.md to " + backup_path.name)
+    else:
+        base_content = migrated_claude_content.strip() or "# Agent Instructions"
+        new_content = base_content.rstrip("\n") + "\n\n" + managed_section
+
+    agents_md.write_text(new_content, encoding="utf-8")
+    print("[OK] Updated AGENTS.md delegation section")
+    return agents_md
 
 
 def create_readme(hooks_dir):
@@ -347,7 +477,7 @@ def print_next_steps(claude_dir, is_user_install):
         print('./delegate "npm ls" "Test" 5')
 
     print("\n3. Update your workflow:")
-    print("   Edit your CLAUDE.md to reference the hooks")
+    print("   Project installs update AGENTS.md and CLAUDE.md automatically")
 
     print("\n4. Run a test delegation:")
     test_cmd = 'python .claude/hooks/pre_delegate.py "git status" "Test delegation"'
@@ -363,6 +493,8 @@ def print_next_steps(claude_dir, is_user_install):
 
     print("\nDocumentation:")
     print("   " + str(claude_dir / "hooks" / "README.md"))
+    if not is_user_install:
+        print("   " + str(claude_dir.parent / ".Codex" / "hooks" / "README.md"))
 
     print("\nTips:")
     print("   - Hooks work identically on Windows, Mac, and Linux")
@@ -402,6 +534,15 @@ def main():
     # Create documentation
     create_sample_claude_md(base_dir)
     if not is_user_install:
+        codex_dir = base_dir.parent / ".Codex"
+        create_directory_structure(codex_dir)
+        create_wrapper_scripts(codex_dir / "hooks")
+        copy_hook_files(codex_dir / "hooks")
+        create_readme(codex_dir / "hooks")
+        create_gitignore(codex_dir)
+        root_claude_md = base_dir.parent / "CLAUDE.md"
+        root_claude_existing = root_claude_md.read_text(encoding="utf-8") if root_claude_md.exists() else ""
+        ensure_agents_md(base_dir.parent, extract_migrated_claude_content(root_claude_existing))
         ensure_root_claude_bridge(base_dir.parent)
     create_readme(hooks_dir)
     create_gitignore(base_dir)

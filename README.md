@@ -42,8 +42,38 @@ git clone https://github.com/carlosduplar/claude-gemini-delegation.git
 cd claude-gemini-delegation
 ```
 
-#### Option A: Install in Current Project
-Run the interactive installer from the root of the project you want to configure. By default, it installs into the current working directory:
+#### Option A: Windows Interactive Installer
+
+From this repository, run the PowerShell installer. It requests elevation,
+asks for the project directory when one is not provided, installs or updates
+all Claude and Codex delegation files, and verifies the result:
+
+```powershell
+.\install-delegation.ps1
+```
+
+You can also pass the project directory directly:
+
+```powershell
+.\install-delegation.ps1 -ProjectDir "C:\path\to\your\project"
+```
+
+#### Option B: Cross-Platform Target Install
+
+From this repository, install into any project with `--target`:
+
+```bash
+python3 setup.py --target /path/to/your/project
+```
+
+On Windows without the PowerShell helper:
+
+```powershell
+python setup.py --target "C:\path\to\your\project"
+```
+
+To install into the current working directory, run:
+
 ```bash
 python3 setup.py
 ```
@@ -59,31 +89,18 @@ On Windows, generated examples use `gemini_delegate.py`, which calls
 `gemini.cmd` and falls back across the stable Gemini 2.5 Flash, Flash Lite,
 and Pro model pools when Gemini reports capacity or 429 errors.
 
-*(Note: If you want to use the automated setup in a different project, you can copy `setup.py`, `install.py`, and the `hooks/` folder to that project's root folder, then run `python3 setup.py` from there.)*
+#### Option C: Repeat for Another Project
 
-#### Option B: Install Globally (Applies to all projects)
-If you want these delegation rules to apply to *every* project you open with Claude Code, you can install the configuration globally into your user directory.
+Run the installer again with a different target. It updates managed sections
+in place and backs up existing `AGENTS.md`, `CLAUDE.md`, and `.claude/CLAUDE.md`
+before changing them.
 
-**Mac / Linux:**
-```bash
-mkdir -p ~/.claude
-cp .claude/CLAUDE.md ~/.claude/CLAUDE.md
-```
-
-**Windows (PowerShell):**
 ```powershell
-New-Item -ItemType Directory -Force -Path "$HOME\.claude"
-Copy-Item -Path ".claude\CLAUDE.md" -Destination "$HOME\.claude\CLAUDE.md"
+.\install-delegation.ps1 -ProjectDir "C:\path\to\another\project"
 ```
 
-#### Option C: Manual Installation (Minimal)
-You can also manually copy the rules file to any specific project:
 ```bash
-# Mac / Linux
-cp .claude/CLAUDE.md /path/to/your/project/.claude/
-
-# Windows
-Copy-Item -Path ".claude\CLAUDE.md" -Destination "C:\path\to\your\project\.claude\CLAUDE.md"
+python3 setup.py --target /path/to/another/project
 ```
 
 **Important: Always restart Claude Code after changing configuration files.**
@@ -96,20 +113,12 @@ Copy-Item -Path ".claude\CLAUDE.md" -Destination "C:\path\to\your\project\.claud
 
 The installer configures:
 
-1. **Root CLAUDE.md** - Contains `@AGENTS.md` so Claude follows the shared agent instructions
-2. **.claude/CLAUDE.md** - Delegation rules and routing examples
-3. **Claude Code settings** - Optimized model and token behavior
-4. **Delegation hooks** (optional) - Automated prompt formatting
-
-**Settings configured in `.claude/settings.json`:**
-
-```json
-{
-  "ANTHROPIC_MODEL": "opusplan"
-}
-```
-
-See [Settings Explained](#settings-explained) for details on each setting.
+1. **Root CLAUDE.md** - Contains only `@AGENTS.md`
+2. **AGENTS.md** - Preserved project rules plus the managed delegation section
+3. **.claude/CLAUDE.md** - Generated Claude Code delegation reference
+4. **.claude/hooks** - Claude Code wrapper hooks
+5. **.Codex/hooks** - Codex wrapper hooks
+6. **delegation_config.json** - Enabled CLI configuration in both hook roots
 
 ### Optional: Delegation Hooks
 
@@ -118,26 +127,15 @@ If you want automated prompt formatting:
 ```bash
 python3 setup_hooks.py
 
-# Installs cross-platform hooks to .claude/hooks/:
+# Installs cross-platform hooks to .claude/hooks/ and .Codex/hooks/:
 # - pre_delegate.py (prompt formatter)
 # - post_delegate.py (response validator)
 # - analyze_metrics.py (usage analyzer)
 ```
 
-**Note:** Hooks are optional. CLAUDE.md alone provides 50-70% token savings.
-
----
-
-## Settings Explained
-
-### ANTHROPIC_MODEL: "opusplan"
-
-**What it does:** Special mode that uses opus during plan mode, then switches to sonnet for execution.
-
-**Benefits:**
-- ✅ Avoids having to switch manually between Opus and Sonnet
-- ✅ Gives the best of both models (Opus for planning, Sonnet for coding)
-- ✅ Maximizes token consumption on a balanced configuration yielding best results
+**Note:** The generated instructions are the main routing control. The hooks
+make delegation easier and provide validation/metrics, but they do not modify
+Claude model settings.
 
 ---
 
@@ -145,7 +143,7 @@ python3 setup_hooks.py
 
 ### Delegation Rules
 
-Your `.claude/CLAUDE.md` configures strict rules for when Claude MUST delegate:
+Your `AGENTS.md` configures strict rules for when Claude or Codex MUST delegate:
 
 **Forbidden for delegation:**
 - Do not use Claude subagents for token-heavy delegation work
@@ -161,16 +159,16 @@ Your `.claude/CLAUDE.md` configures strict rules for when Claude MUST delegate:
 
 **Decision Tree:**
 ```
-1. >500 lines of output? → DELEGATE
-2. 3+ new files to read? → DELEGATE
-3. Banned command? → DELEGATE
-4. Security/audit task? → DELEGATE
-5. Already in context? → Handle directly
+1. >500 lines of output? -> DELEGATE
+2. 3+ new files to read? -> DELEGATE
+3. Banned command? -> DELEGATE
+4. Security/audit task? -> DELEGATE
+5. Already in context? -> Handle directly
 ```
 
 ### Example: Before vs After
 
-**❌ WITHOUT Delegation:**
+**WITHOUT Delegation:**
 ```
 User: "Check npm dependencies"
 Claude: Let me read npm ls output...
@@ -178,7 +176,7 @@ Claude: Let me read npm ls output...
 Total cost: 2,000 tokens
 ```
 
-**✅ WITH Delegation:**
+**WITH Delegation:**
 ```
 User: "Check npm dependencies"
 Claude: I'll delegate this to preserve your quota:
@@ -194,7 +192,7 @@ Total cost: 150 tokens (92% savings!)
 
 ## What Gets Delegated
 
-### ✅ Always Delegate (Token Savings: 80-95%)
+### Always Delegate (Token Savings: 80-95%)
 
 - **Shell commands with verbose output**
   - `npm ls`, `pip freeze`, `git log`
@@ -211,7 +209,7 @@ Total cost: 150 tokens (92% savings!)
   - API reference lookups
   - Stack Overflow searches
 
-### ❌ Never Delegate (Claude Handles)
+### Never Delegate (Claude Handles)
 
 - Single-file edits already in context
 - Architectural decisions (no new data needed)
@@ -230,23 +228,14 @@ python3 setup.py
 # Interactive installer:
 # - Detects installed CLIs
 # - Enables Gemini by default; extra CLIs require --enable-cli or --all-clis
-# - Configures settings.json
-# - Installs CLAUDE.md
-# - Optional: delegation hooks
+# - Installs or updates AGENTS.md, CLAUDE.md, .claude, and .Codex hook roots
 ```
 
 ### Option 2: Manual Setup (Minimal)
 
 ```bash
-# Just copy CLAUDE.md
-cp .claude/CLAUDE.md ~/.claude/
-
-# Manually add to .claude/settings.json:
-{
-  "ANTHROPIC_MODEL": "opusplan"
-}
-
-# Restart Claude Code
+# Prefer setup.py --target. Manual installs must include AGENTS.md plus
+# the hook directories used by your agent workflow.
 ```
 
 ### Option 3: Hooks Only
@@ -269,9 +258,9 @@ python3 setup_hooks.py
 
 | Platform | Support | Notes |
 |----------|---------|-------|
-| **Linux** | ✅ Full | Native bash support |
-| **macOS** | ✅ Full | Native bash support |
-| **Windows** | ✅ Full | PowerShell & Git Bash supported |
+| **Linux** | Full | Native bash support |
+| **macOS** | Full | Native bash support |
+| **Windows** | Full | PowerShell, CMD, and Git Bash supported |
 
 ### Python Version Requirement
 
@@ -290,7 +279,7 @@ Keep Claude aware of token pressure by updating CLAUDE.md:
 ```markdown
 # In your .claude/CLAUDE.md
 **Budget: 19K tokens per 5hr | Remaining: 14,200**
-**Status: ⚠️ WARNING (below 15K)**
+**Status: WARNING (below 15K)**
 ```
 
 Update this periodically during your session. When status is WARNING, delegation becomes more aggressive.
@@ -380,20 +369,20 @@ export GEMINI_API_KEY="your-key-here"
 # Add to ~/.bashrc or ~/.zshrc for persistence
 ```
 
-### Settings Not Applied
+### Bridge Not Loading
 
-**Problem:** settings.json changes don't take effect.
+**Problem:** Claude reads root `CLAUDE.md` but delegation rules do not apply.
 
 **Solution:**
 ```bash
-# 1. Verify settings.json exists
-cat .claude/settings.json
+# Root CLAUDE.md should contain only the AGENTS bridge:
+cat CLAUDE.md
 
-# 2. Completely restart Claude Code
-# (not just /clear - full application restart)
+# Expected:
+# @AGENTS.md
 
-# 3. Re-run setup if needed
-python3 setup.py
+# Re-run setup if needed:
+python3 setup.py --target /path/to/your/project
 ```
 
 ---
@@ -411,22 +400,23 @@ python3 setup.py
 ---
 
 ## Project Structure
+```
 claude-gemini-delegation/
-├── .claude/
-│   ├── CLAUDE.md              # Core delegation rules
-│   └── settings.json.example  # Settings template
-├── hooks/                      # Optional delegation hooks
-│   ├── pre_delegate.py
-│   ├── post_delegate.py
-│   └── analyze_metrics.py
-├── examples/                   # Example configurations
-│   ├── minimal-CLAUDE.md
-│   └── security-focused-CLAUDE.md
-├── tests/regression/
-│   └── run_tests.sh
-├── setup.py                    # Interactive installer
-├── setup_hooks.py              # Hooks installer
-├── LICENSE
-└── README.md
+|-- hooks/                     # Hook templates copied into target projects
+|   |-- pre_delegate.py
+|   |-- post_delegate.py
+|   |-- analyze_metrics.py
+|   `-- gemini_delegate.py
+|-- tests/
+|   |-- test_install.py
+|   `-- regression/
+|-- install-delegation.ps1     # Elevated Windows target installer
+|-- setup.py                   # Cross-platform target installer
+|-- setup_hooks.py             # Hooks-only installer
+|-- install.py                 # Shared installer helpers
+|-- AGENTS.md
+|-- LICENSE
+`-- README.md
+```
 
-**Last Updated**: February 16, 2026
+**Last Updated**: May 29, 2026

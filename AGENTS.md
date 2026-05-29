@@ -15,24 +15,25 @@
 
 ## Quick Delegation
 
-Use the wrapper scripts for easy delegation:
+Use the wrapper scripts for easy delegation. Claude Code uses `.claude/hooks`;
+Codex workflows can use the mirrored `.Codex/hooks` path.
 
 **Unix/Mac:**
 ```bash
-PROMPT=$(./.Codex/hooks/delegate "npm ls" "Build analysis")
+PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
 gemini --model gemini-2.5-flash -p "$PROMPT"
 ```
 
 **Windows (PowerShell):**
 ```powershell
-$prompt = & .Codex/hooks/delegate.ps1 "npm ls" "Build analysis"
-gemini --model gemini-2.5-flash -p $prompt
+$prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
+$prompt | python .claude/hooks/gemini_delegate.py
 ```
 
 **Windows (CMD):**
 ```cmd
-FOR /F "delims=" %i IN ('.Codex\hooks\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
-gemini --model gemini-2.5-flash -p "%PROMPT%"
+FOR /F "delims=" %i IN ('.claude\hooks\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
+echo %PROMPT% | python .claude\hooks\gemini_delegate.py
 ```
 
 ## Delegation Workflow
@@ -48,21 +49,21 @@ gemini --model gemini-2.5-flash -p "%PROMPT%"
 ### Security Audit
 ```bash
 # Auto-routes to Gemini (if enabled)
-PROMPT=$(./.Codex/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
+PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
 gemini --model gemini-2.5-flash -p "$PROMPT"
 ```
 
 ### Git Operations  
 ```bash
 # Auto-routes to Aider (if enabled)
-PROMPT=$(./.Codex/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")
+PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")
 aider -p "$PROMPT"
 ```
 
 ### Code Analysis
 ```bash
 # Routes based on configured preference
-PROMPT=$(./.Codex/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
+PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
 gemini --model gemini-2.5-flash -p "$PROMPT"
 ```
 
@@ -70,7 +71,7 @@ gemini --model gemini-2.5-flash -p "$PROMPT"
 
 ```bash
 # Analyze delegation metrics
-python .Codex/hooks/analyze_metrics.py
+python .claude/hooks/analyze_metrics.py
 
 # Review routing effectiveness
 # Update presets if needed
@@ -81,3 +82,9 @@ python .Codex/hooks/analyze_metrics.py
 To reconfigure delegation preferences, run the setup wizard again manually.
 
 This will let you enable/disable CLIs.
+
+For Windows target installs, use:
+
+```powershell
+.\install-delegation.ps1
+```
