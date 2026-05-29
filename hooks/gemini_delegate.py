@@ -246,8 +246,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--idle-timeout-seconds",
         type=int,
-        default=30,
-        help="Kill model if no output for this many seconds (default 30). 0 disables.",
+        default=60,
+        help="Kill model if no output for this many seconds (default 60). 0 disables.",
     )
     parser.add_argument(
         "--timeout-seconds",
