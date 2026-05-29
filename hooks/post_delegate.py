@@ -10,6 +10,7 @@ Example:
     python post_delegate.py "Response text here" 10 "dependency-analysis"
 """ 
 
+import os
 import sys
 import re
 import csv
