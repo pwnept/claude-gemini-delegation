@@ -122,10 +122,19 @@ def main():
     if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
         print(__doc__)
         sys.exit(1)
-    
-    response = sys.argv[1]
-    max_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 10
-    task_context = sys.argv[3] if len(sys.argv) > 3 else "unknown"
+
+    if sys.argv[1] == '--input-file':
+        if len(sys.argv) < 3:
+            print("--input-file requires a path argument", file=sys.stderr)
+            sys.exit(1)
+        from pathlib import Path as _Path
+        response = _Path(sys.argv[2]).read_text(encoding='utf-8', errors='replace')
+        max_lines = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+        task_context = sys.argv[4] if len(sys.argv) > 4 else "unknown"
+    else:
+        response = sys.argv[1]
+        max_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+        task_context = sys.argv[3] if len(sys.argv) > 3 else "unknown"
     
     # Get metrics directory
     # Try to find .claude directory

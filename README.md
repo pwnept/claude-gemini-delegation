@@ -86,8 +86,8 @@ python3 setup.py --all-clis
 ```
 
 On Windows, generated examples use `gemini_delegate.py`, which calls
-`gemini.cmd` and falls back across the stable Gemini 2.5 Flash, Flash Lite,
-and Pro model pools when Gemini reports capacity or 429 errors. Windows
+`gemini.cmd` and falls back across Gemini 3 Flash, 2.5 Flash, 3.1 Flash Lite,
+2.5 Flash Lite, and 2.5 Pro model pools when Gemini reports capacity or 429 errors. Windows
 wrappers resolve Python 3 explicitly (`py -3`, then `python3`, then a verified
 Python 3 `python`) so machines with Python 2 on `PATH` do not silently break.
 

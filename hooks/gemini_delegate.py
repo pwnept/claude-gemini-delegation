@@ -27,13 +27,17 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 DEFAULT_MODELS = [
+    "gemini-3-flash-preview",
     "gemini-2.5-flash",
+    "gemini-3.1-flash-lite-preview",
     "gemini-2.5-flash-lite",
     "gemini-2.5-pro",
 ]
 
 RESEARCH_MODELS = [
+    "gemini-3.1-pro-preview",
     "gemini-2.5-pro",
+    "gemini-3-flash-preview",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
 ]

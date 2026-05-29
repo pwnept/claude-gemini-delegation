@@ -65,7 +65,13 @@ $responseText = $response -join "`n"
 if ($responseText) {
     Write-Output $responseText
     $maxLinesForValidation = if ($MaxLines -gt 0) { $MaxLines } else { 10 }
-    Invoke-Python3 -PythonArgs @("$ScriptDir/post_delegate.py", $responseText, "$maxLinesForValidation", $Task) | Out-Null
+    $tmpFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $responseText | Set-Content -Path $tmpFile -Encoding UTF8
+        Invoke-Python3 -PythonArgs @("$ScriptDir/post_delegate.py", "--input-file", $tmpFile, "$maxLinesForValidation", $Task) | Out-Null
+    } finally {
+        Remove-Item $tmpFile -ErrorAction SilentlyContinue
+    }
 }
 
 exit $delegateExitCode

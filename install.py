@@ -15,6 +15,9 @@ AGENTS_MARKER_BEGIN = "> [claude-gemini-delegation:agents-begin]"
 AGENTS_MARKER_END = "> [claude-gemini-delegation:agents-end]"
 MIGRATED_CLAUDE_MARKER_BEGIN = "> [claude-gemini-delegation:migrated-claude-begin]"
 MIGRATED_CLAUDE_MARKER_END = "> [claude-gemini-delegation:migrated-claude-end]"
+CLAUDE_MARKER_BEGIN = "> [claude-gemini-delegation:begin]"
+CLAUDE_MARKER_END = "> [claude-gemini-delegation:end]"
+DOT_CLAUDE_BRIDGE = "@../AGENTS.md\n"
 OLD_DEFAULT_AGENTS_TEXT = """# Agent Instructions
 
 Gemini delegation is installed locally in `.claude/hooks`.
@@ -240,21 +243,104 @@ def normalize_agents_content(existing):
     return normalized
 
 
-def ensure_agents_md(project_dir: Path, migrated_claude_content=""):
-    """Ensure AGENTS.md exists without overwriting project-specific instructions."""
+def ensure_dot_claude_bridge(claude_dir: Path) -> str:
+    """Replace .claude/CLAUDE.md with a bridge to ../AGENTS.md.
+
+    Returns any user content that was outside the managed delegation section
+    so it can be migrated into AGENTS.md.
+    """
+    claude_md = claude_dir / "CLAUDE.md"
+
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
+        if existing == DOT_CLAUDE_BRIDGE:
+            print(f"\033[92m[SUCCESS] .claude/CLAUDE.md is already a bridge to AGENTS.md\033[0m")
+            return ""
+
+        # Strip managed delegation section, keep any surrounding user content
+        content = existing
+        if CLAUDE_MARKER_BEGIN in content and CLAUDE_MARKER_END in content:
+            before = content[:content.index(CLAUDE_MARKER_BEGIN)]
+            after = content[content.index(CLAUDE_MARKER_END) + len(CLAUDE_MARKER_END):]
+            content = before + after
+        elif CLAUDE_MARKER_BEGIN in content:
+            content = content[:content.index(CLAUDE_MARKER_BEGIN)]
+
+        lines = [l for l in content.splitlines()
+                 if l.strip() not in ("@../AGENTS.md", "@AGENTS.md")]
+        user_content = "\n".join(lines).strip()
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = claude_md.with_name(f"CLAUDE.md.bak.{timestamp}")
+        shutil.copy2(claude_md, backup_path)
+        print(f"\033[94m[INFO] Backed up .claude/CLAUDE.md to {backup_path.name}\033[0m")
+    else:
+        user_content = ""
+
+    claude_md.write_text(DOT_CLAUDE_BRIDGE, encoding="utf-8")
+    print(f"\033[92m[SUCCESS] .claude/CLAUDE.md is now a bridge to AGENTS.md\033[0m")
+    return user_content + "\n" if user_content else ""
+
+
+def _launch_claude_conflict_fix(agents_md: Path, conflict: str):
+    """Launch the claude CLI to resolve an AGENTS.md marker conflict, then exit."""
+    prompt = (
+        f"The file {agents_md} has mismatched delegation section markers. "
+        f"Problem: {conflict}. "
+        "The begin marker is '> [claude-gemini-delegation:agents-begin]' and "
+        "the end marker is '> [claude-gemini-delegation:agents-end]'. "
+        "Inspect the file, fix or remove the orphaned marker so begin and end "
+        "properly wrap the delegation section, then confirm the file is valid."
+    )
+    print(f"\033[93m[WARNING] AGENTS.md conflict: {conflict}\033[0m")
+    print(f"\033[94m[INFO] Launching Claude CLI to resolve the conflict...\033[0m")
+    try:
+        result = subprocess.run(["claude", "--print", prompt], timeout=300, check=False)
+        if result.returncode == 0:
+            print(f"\033[92m[SUCCESS] Claude resolved the conflict. Re-run setup to apply changes.\033[0m")
+        else:
+            raise OSError(f"claude exited with code {result.returncode}")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"\033[91m[ERROR] Could not launch Claude automatically: {exc}\033[0m")
+        print(f"\033[91m[ERROR] Manually fix {agents_md}:\033[0m")
+        print( "         Ensure the begin/end delegation markers match and wrap the section.")
+        print( "         Begin: > [claude-gemini-delegation:agents-begin]")
+        print( "         End:   > [claude-gemini-delegation:agents-end]")
+    raise SystemExit(1)
+
+
+def ensure_agents_md(project_dir: Path, migrated_claude_content="", managed_body=None):
+    """Ensure AGENTS.md exists without overwriting project-specific instructions.
+
+    If managed_body is provided it is used as the delegation section body
+    instead of the default build_agents_section() content.
+    """
     agents_md = project_dir / "AGENTS.md"
-    managed_section = build_agents_section()
+    managed_section = (
+        f"{AGENTS_MARKER_BEGIN}\n{managed_body.strip()}\n{AGENTS_MARKER_END}\n"
+        if managed_body is not None
+        else build_agents_section()
+    )
     migrated_section = build_migrated_claude_section(migrated_claude_content)
 
     if agents_md.exists():
         raw_existing = agents_md.read_text(encoding="utf-8")
         existing = normalize_agents_content(raw_existing)
-        working = existing
 
+        has_begin = AGENTS_MARKER_BEGIN in existing
+        has_end = AGENTS_MARKER_END in existing
+        if has_begin != has_end:
+            conflict = (
+                "begin marker found without end marker"
+                if has_begin else "end marker found without begin marker"
+            )
+            _launch_claude_conflict_fix(agents_md, conflict)
+
+        working = existing
         if migrated_section and MIGRATED_CLAUDE_MARKER_BEGIN not in working:
             working = working.rstrip("\n") + "\n\n" + migrated_section
 
-        if AGENTS_MARKER_BEGIN in existing and AGENTS_MARKER_END in existing:
+        if has_begin and has_end:
             before = working[:working.index(AGENTS_MARKER_BEGIN)]
             after = working[working.index(AGENTS_MARKER_END) + len(AGENTS_MARKER_END):]
             new_content = before + managed_section + after.lstrip("\n")

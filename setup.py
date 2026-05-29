@@ -56,7 +56,7 @@ def print_info(text: str):
 # Assume hook templates are in same directory as installer
 SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 ROOT_CLAUDE_IMPORTS = ("@AGENTS.md",)
 
 
@@ -495,6 +495,91 @@ This will let you enable/disable CLIs.
     print_success("Updated CLAUDE.md")
 
 
+def _build_claude_md_body(config: Dict, presets: Dict) -> str:
+    """Return the managed delegation body for AGENTS.md, built from live config."""
+    enabled_clis = config.get("cli_configs", {})
+
+    if not enabled_clis:
+        return (
+            "## Gemini Delegation\n\n"
+            "No external CLIs configured. Run `python3 setup.py` to enable delegation."
+        )
+
+    cli_list = "\n".join(
+        f"- **{v['name']}**: {v['description']}" for v in enabled_clis.values()
+    )
+    preset_list = "\n".join(
+        f"- **{name}**: Routes to `{p['cli']}`\n  Pattern: `{p['pattern']}`"
+        for name, p in presets.items()
+    )
+
+    git_ops_example = ""
+    if "git_operations" in presets:
+        git_ops_example = (
+            "\n### Git Operations\n"
+            "```bash\n"
+            'PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")\n'
+            'aider -p "$PROMPT"\n'
+            "```\n"
+        )
+
+    return f"""## Gemini Delegation
+
+Gemini delegation is installed locally in `.claude/hooks` and `.Codex/hooks`.
+
+### Enabled CLIs
+
+{cli_list}
+
+### Delegation Presets
+
+{preset_list}
+
+### Always Delegate
+
+- Commands expected to produce more than 500 lines of output
+- `npm ls`, `pip list`, `pip freeze`, and verbose dependency listings
+- `git log` beyond 5 commits or broad git history analysis
+- Recursive searches such as `find`, `grep -r`, or repository-wide scans
+- Reading or analyzing 3 or more new files
+- Security audits, vulnerability scans, XSS/SQL injection/CSRF checks
+- Documentation lookup or web search. Use `--profile research` so Gemini Pro is tried before Flash.
+- Broad codebase analysis, performance review, or inspection tasks
+
+### Subagent Policy
+
+Do **not** use Claude subagents for delegation work. Subagents spend Claude
+tokens and defeat this configuration's token-saving purpose.
+Only use Claude subagents when the user explicitly asks for Claude subagents by name.
+
+### Delegation Workflow
+
+1. **Identify task type** - Security? Git ops? Analysis?
+2. **Check presets** - Is there a matching preset?
+3. **Use delegation hook** - Let the hook format the prompt
+4. **Execute with Gemini CLI** - Use `gemini_delegate.py`, not Claude subagents
+5. **Validate response** - Check quality with the post-delegation hook
+
+### Quick Delegation
+
+**Windows (PowerShell):**
+```powershell
+.claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+.claude/hooks/delegate_and_log.ps1 "find current docs for X" "Research task" 10 -Profile research
+```
+
+**Unix/Mac:**
+```bash
+PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
+gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+```
+{git_ops_example}
+`.claude/settings.json` registers a PreToolUse Bash guard that blocks known
+high-output commands and returns delegation instructions. Keep project-specific
+agent instructions outside this managed section. Re-running setup updates only
+this block."""
+
+
 def create_usage_examples(config: Dict, base_dir: Path):
     """Create example scripts showing delegation usage."""
     hook_root = base_dir.name
@@ -672,6 +757,7 @@ def main():
         extract_migrated_claude_content,
         ensure_agents_md,
         ensure_root_claude_bridge,
+        ensure_dot_claude_bridge,
         install_not_found_clis
     )
 
@@ -746,11 +832,20 @@ def main():
     # Build routing presets
     presets = build_routing_presets(config)
     
-    # Create enhanced CLAUDE.md
-    create_enhanced_claude_md(config, presets, base_dir)
+    # Make .claude/CLAUDE.md a bridge; migrate its content to AGENTS.md
+    dot_claude_migrated = ensure_dot_claude_bridge(base_dir)
     root_claude_md = base_dir.parent / "CLAUDE.md"
     root_claude_existing = root_claude_md.read_text(encoding="utf-8") if root_claude_md.exists() else ""
-    ensure_agents_md(base_dir.parent, extract_migrated_claude_content(root_claude_existing))
+    root_migrated = extract_migrated_claude_content(root_claude_existing)
+    combined_migration = (
+        root_migrated.rstrip("\n") + "\n\n" + dot_claude_migrated
+        if dot_claude_migrated.strip() else root_migrated
+    )
+    ensure_agents_md(
+        base_dir.parent,
+        combined_migration,
+        managed_body=_build_claude_md_body(config, presets),
+    )
     ensure_root_claude_bridge(base_dir.parent)
     
     # Create usage examples
