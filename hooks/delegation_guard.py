@@ -7,6 +7,7 @@ and print redirection guidance to stderr.
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -36,7 +37,7 @@ GUIDANCE = f"""This command matches a delegation pattern. Use Gemini instead:
 
 PowerShell:
   $prompt = & {_HOOK_PREFIX}/delegate.ps1 "<task>" "<context>"
-  $prompt | py -3 {_HOOK_PREFIX}/gemini_delegate.py
+  $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 
 Or with validation/metrics:
   {_HOOK_PREFIX}/delegate_and_log.ps1 "<task>" "<context>" 10
