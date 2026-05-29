@@ -210,6 +210,12 @@ def _write_gemini_delegation_wrappers(hooks_dir: Path):
     )
 
     (hooks_dir / "delegate.ps1").write_text(
+        "[CmdletBinding()]\n"
+        "param(\n"
+        "    [Parameter(ValueFromPipeline=$true, Position=0)][string]$Task,\n"
+        "    [Parameter(Position=1)][string]$Context = 'General task',\n"
+        "    [Parameter(Position=2)][int]$MaxLines = 0\n"
+        ")\n"
         "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
         "$PythonCommands = @(\n"
         "    @{ Command = 'py'; Prefix = @('-3') },\n"
@@ -220,7 +226,9 @@ def _write_gemini_delegation_wrappers(hooks_dir: Path):
         "    if (-not (Get-Command $Python.Command -ErrorAction SilentlyContinue)) { continue }\n"
         "    & $Python.Command @($Python.Prefix + @('-c', 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)')) *> $null\n"
         "    if ($LASTEXITCODE -ne 0) { continue }\n"
-        "    & $Python.Command @($Python.Prefix + @(\"$ScriptDir/pre_delegate.py\") + $args)\n"
+        "    $argsToPass = @(\"$ScriptDir/pre_delegate.py\", \"-\", $Context)\n"
+        "    if ($MaxLines -gt 0) { $argsToPass += $MaxLines }\n"
+        "    $Task | & $Python.Command @($Python.Prefix + $argsToPass)\n"
         "    exit $LASTEXITCODE\n"
         "}\n"
         "Write-Error 'Python 3 was not found.'\n"

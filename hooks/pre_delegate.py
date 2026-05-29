@@ -142,14 +142,16 @@ def main():
         print(__doc__)
         sys.exit(1)
     
-    task = sys.argv[1]
-    if task == "-" or not task:
+    task_arg = sys.argv[1]
+    if task_arg == "-" or not task_arg:
         task = sys.stdin.read().strip()
-    
-    context = sys.argv[2] if len(sys.argv) > 2 else "General task"
-    # Note: max_lines remains as sys.argv[3] if task was '-', 
-    # so we might need to adjust indices if we change how delegate_and_log calls it.
-    max_lines = int(sys.argv[3]) if len(sys.argv) > 3 else None
+        # Shift arguments since task was read from stdin
+        context = sys.argv[2] if len(sys.argv) > 2 else "General task"
+        max_lines = int(sys.argv[3]) if len(sys.argv) > 3 else None
+    else:
+        task = task_arg
+        context = sys.argv[2] if len(sys.argv) > 2 else "General task"
+        max_lines = int(sys.argv[3]) if len(sys.argv) > 3 else None
     
     # Expand @ paths in task
     task = expand_paths(task)
