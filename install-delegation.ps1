@@ -93,30 +93,30 @@ function Test-DelegationInstall {
     $required = @(
         "CLAUDE.md",
         "AGENTS.md",
+        # Shared scripts in .gemini-delegation/
+        ".gemini-delegation\hooks\gemini_delegate.py",
+        ".gemini-delegation\hooks\pre_delegate.py",
+        ".gemini-delegation\hooks\post_delegate.py",
+        ".gemini-delegation\hooks\analyze_metrics.py",
+        ".gemini-delegation\hooks\delegation_guard.py",
+        ".gemini-delegation\hooks\delegation_guard.ps1",
+        ".gemini-delegation\hooks\delegate_and_log.ps1",
+        ".gemini-delegation\delegation_config.json",
+        # Claude per-env shims
         ".claude\CLAUDE.md",
-        ".claude\delegation_config.json",
-        ".claude\hooks\pre_delegate.py",
-        ".claude\hooks\post_delegate.py",
-        ".claude\hooks\analyze_metrics.py",
-        ".claude\hooks\gemini_delegate.py",
-        ".claude\hooks\delegation_guard.py",
-        ".claude\hooks\delegation_guard.ps1",
-        ".claude\hooks\delegate_and_log.ps1",
         ".claude\hooks\delegate.ps1",
         ".claude\hooks\delegate.bat",
         ".claude\hooks\delegate",
+        ".claude\hooks\delegate_and_log.ps1",
+        ".claude\hooks\delegation_guard.ps1",
         ".claude\settings.json",
-        ".Codex\delegation_config.json",
-        ".Codex\hooks\pre_delegate.py",
-        ".Codex\hooks\post_delegate.py",
-        ".Codex\hooks\analyze_metrics.py",
-        ".Codex\hooks\gemini_delegate.py",
-        ".Codex\hooks\delegation_guard.py",
-        ".Codex\hooks\delegation_guard.ps1",
-        ".Codex\hooks\delegate_and_log.ps1",
+        # Codex per-env shims
         ".Codex\hooks\delegate.ps1",
         ".Codex\hooks\delegate.bat",
-        ".Codex\hooks\delegate"
+        ".Codex\hooks\delegate",
+        ".Codex\hooks\delegate_and_log.ps1",
+        ".Codex\hooks\delegation_guard.ps1",
+        ".Codex\settings.json"
     )
 
     foreach ($relative in $required) {

@@ -136,22 +136,21 @@ def main():
         max_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 10
         task_context = sys.argv[3] if len(sys.argv) > 3 else "unknown"
     
-    # Get metrics directory
-    # Try to find .claude directory
+    # Prefer .gemini-delegation/ for metrics; fall back to .claude/.
     current_dir = Path.cwd()
-    claude_dir = current_dir / ".claude"
-    
-    # If not in project root, try to find it up the tree
-    if not claude_dir.exists():
-        for parent in current_dir.parents:
-            if (parent / ".claude").exists():
-                claude_dir = parent / ".claude"
+    agent_dir = None
+    for directory in (current_dir, *current_dir.parents):
+        for name in (".gemini-delegation", ".claude"):
+            candidate = directory / name
+            if candidate.exists():
+                agent_dir = candidate
                 break
-        else:
-            # Create in current directory if not found
-            claude_dir = current_dir / ".claude"
-    
-    metrics_dir = claude_dir / "metrics"
+        if agent_dir:
+            break
+    if agent_dir is None:
+        agent_dir = current_dir / ".gemini-delegation"
+
+    metrics_dir = agent_dir / "metrics"
     
     # Validate response
     actual_lines = count_lines(response)

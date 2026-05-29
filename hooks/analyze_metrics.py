@@ -165,22 +165,23 @@ def main():
         if sys.argv[1] == '--days' and len(sys.argv) > 2:
             days = int(sys.argv[2])
     
-    # Find metrics directory
+    # Prefer .gemini-delegation/ for metrics; fall back to .claude/.
     current_dir = Path.cwd()
-    claude_dir = current_dir / ".claude"
-    
-    # Try to find .claude directory up the tree
-    if not claude_dir.exists():
-        for parent in current_dir.parents:
-            if (parent / ".claude").exists():
-                claude_dir = parent / ".claude"
+    agent_dir = None
+    for directory in (current_dir, *current_dir.parents):
+        for name in (".gemini-delegation", ".claude"):
+            candidate = directory / name
+            if candidate.exists():
+                agent_dir = candidate
                 break
-        else:
-            print("❌ Error: .claude directory not found")
-            print("   Run this script from your project root or a subdirectory")
-            sys.exit(1)
-    
-    metrics_dir = claude_dir / "metrics"
+        if agent_dir:
+            break
+    if agent_dir is None:
+        print("❌ Error: neither .gemini-delegation nor .claude directory found")
+        print("   Run this script from your project root or a subdirectory")
+        sys.exit(1)
+
+    metrics_dir = agent_dir / "metrics"
     
     if not metrics_dir.exists():
         print("📊 No metrics directory found")

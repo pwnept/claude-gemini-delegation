@@ -33,6 +33,17 @@ SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
 DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 ROOT_CLAUDE_IMPORTS = ("@AGENTS.md",)
+GEMINI_DELEGATION_DIR = ".gemini-delegation"
+
+SHARED_HOOK_SCRIPTS = [
+    "gemini_delegate.py",
+    "pre_delegate.py",
+    "post_delegate.py",
+    "analyze_metrics.py",
+    "delegation_guard.py",
+    "delegation_guard.ps1",
+    "delegate_and_log.ps1",
+]
 LEGACY_ROOT_CLAUDE_IMPORTS = ("@AGENTS.md", "@.claude/CLAUDE.md")
 AGENTS_MARKER_BEGIN = "> [claude-gemini-delegation:agents-begin]"
 AGENTS_MARKER_END = "> [claude-gemini-delegation:agents-end]"
@@ -80,6 +91,141 @@ def make_executable(file_path):
         current_permissions = file_path.stat().st_mode
         file_path.chmod(current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         print("   Made executable: " + file_path.name)
+
+
+def install_gemini_delegation_dir(project_dir: Path, config: dict):
+    """Install the shared .gemini-delegation/ directory with all hook scripts."""
+    gem_dir = project_dir / GEMINI_DELEGATION_DIR
+    hooks_dir = gem_dir / "hooks"
+    metrics_dir = gem_dir / "metrics"
+
+    print("\n" + "=" * 60)
+    print("Installing Shared .gemini-delegation/ Directory")
+    print("=" * 60)
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    for script in SHARED_HOOK_SCRIPTS:
+        src = HOOKS_SOURCE / script
+        if not src.exists():
+            print("[WARNING] " + script + " not found in source, skipping")
+            continue
+        dest = hooks_dir / script
+        shutil.copy2(src, dest)
+        make_executable(dest)
+        print("[OK] Installed " + script)
+
+    _write_gemini_delegation_wrappers(hooks_dir)
+
+    config_path = gem_dir / "delegation_config.json"
+    import json as _json
+    with config_path.open("w", encoding="utf-8") as f:
+        _json.dump(config, f, indent=2)
+    print("[OK] Saved config to " + str(config_path))
+
+
+def _write_gemini_delegation_wrappers(hooks_dir: Path):
+    """Write the main delegate wrapper scripts into .gemini-delegation/hooks/."""
+    unix = hooks_dir / "delegate"
+    unix.write_text(
+        '#!/bin/bash\nSCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+        'python3 "$SCRIPT_DIR/pre_delegate.py" "$@"\n',
+        encoding="utf-8",
+    )
+    make_executable(unix)
+
+    (hooks_dir / "delegate.bat").write_text(
+        "@echo off\n"
+        'set "SCRIPT_DIR=%~dp0"\n'
+        'py -3 "%SCRIPT_DIR%pre_delegate.py" %*\n',
+        encoding="utf-8",
+    )
+
+    (hooks_dir / "delegate.ps1").write_text(
+        "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
+        "$PythonCommands = @(\n"
+        "    @{ Command = 'py'; Prefix = @('-3') },\n"
+        "    @{ Command = 'python3'; Prefix = @() },\n"
+        "    @{ Command = 'python'; Prefix = @() }\n"
+        ")\n"
+        "foreach ($Python in $PythonCommands) {\n"
+        "    if (-not (Get-Command $Python.Command -ErrorAction SilentlyContinue)) { continue }\n"
+        "    & $Python.Command @($Python.Prefix + @('-c', 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)')) *> $null\n"
+        "    if ($LASTEXITCODE -ne 0) { continue }\n"
+        "    & $Python.Command @($Python.Prefix + @(\"$ScriptDir/pre_delegate.py\") + $args)\n"
+        "    exit $LASTEXITCODE\n"
+        "}\n"
+        "Write-Error 'Python 3 was not found.'\n"
+        "exit 127\n",
+        encoding="utf-8",
+    )
+    print("[OK] Created .gemini-delegation wrapper scripts (delegate, delegate.bat, delegate.ps1)")
+
+
+def create_env_shims(hooks_dir: Path):
+    """Create thin per-environment shims that forward to .gemini-delegation/hooks/."""
+    print("\n" + "=" * 60)
+    print("Creating Wrapper Scripts")
+    print("=" * 60)
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    shim = hooks_dir / "delegate"
+    shim.write_text(
+        '#!/bin/bash\n'
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+        'PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"\n'
+        'exec "$PROJECT_ROOT/.gemini-delegation/hooks/delegate" "$@"\n',
+        encoding="utf-8",
+    )
+    make_executable(shim)
+    print("[OK] Created Unix wrapper: delegate")
+
+    (hooks_dir / "delegate.bat").write_text(
+        "@echo off\n"
+        'for %%I in ("%~dp0..\\..") do set "PROJECT_ROOT=%%~fI"\n'
+        'call "%PROJECT_ROOT%\\.gemini-delegation\\hooks\\delegate.bat" %*\n',
+        encoding="utf-8",
+    )
+    print("[OK] Created Windows wrapper: delegate.bat")
+
+    (hooks_dir / "delegate.ps1").write_text(
+        "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
+        '$ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\\.."))\n'
+        '& (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegate.ps1") @args\n'
+        "exit $LASTEXITCODE\n",
+        encoding="utf-8",
+    )
+    print("[OK] Created PowerShell wrapper: delegate.ps1")
+
+    (hooks_dir / "delegate_and_log.ps1").write_text(
+        "[CmdletBinding()]\n"
+        "param(\n"
+        "    [Parameter(Mandatory = $true, Position = 0)][string]$Task,\n"
+        "    [Parameter(Position = 1)][string]$Context = 'General task',\n"
+        "    [Parameter(Position = 2)][int]$MaxLines = 0,\n"
+        "    [ValidateSet('default', 'research')]\n"
+        "    [string]$Profile = 'default'\n"
+        ")\n"
+        "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
+        '$ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\\.."))\n'
+        '& (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegate_and_log.ps1") `\n'
+        "    -Task $Task -Context $Context -MaxLines $MaxLines -Profile $Profile\n"
+        "exit $LASTEXITCODE\n",
+        encoding="utf-8",
+    )
+    print("[OK] Created PowerShell wrapper: delegate_and_log.ps1")
+
+    env_dir_name = hooks_dir.parent.name
+    (hooks_dir / "delegation_guard.ps1").write_text(
+        "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
+        '$ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\\.."))\n'
+        f'$env:DELEGATION_HOOK_PREFIX = "{env_dir_name}/hooks"\n'
+        "$InputPayload = [Console]::In.ReadToEnd()\n"
+        '$InputPayload | & (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegation_guard.ps1")\n'
+        "exit $LASTEXITCODE\n",
+        encoding="utf-8",
+    )
+    print("[OK] Created PowerShell wrapper: delegation_guard.ps1")
 
 
 def create_wrapper_scripts(hooks_dir):
@@ -696,10 +842,13 @@ def main():
     # Create directory structure
     create_directory_structure(base_dir)
 
-    # Create wrapper scripts
+    # Install shared scripts to .gemini-delegation/ (single copy for both envs)
+    config = {"version": "1.0.0", "preferences": {"default_cli": "gemini"}}
+    install_gemini_delegation_dir(base_dir.parent, config)
+
+    # Install per-env shims only (thin forwarders to .gemini-delegation/hooks/)
     hooks_dir = base_dir / "hooks"
-    create_wrapper_scripts(hooks_dir)
-    copy_hook_files(hooks_dir)
+    create_env_shims(hooks_dir)
 
     # Make .claude/CLAUDE.md a bridge; migrate its content to AGENTS.md
     dot_claude_migrated = ensure_dot_claude_bridge(base_dir)
@@ -707,8 +856,7 @@ def main():
         create_claude_settings(base_dir)
         codex_dir = base_dir.parent / ".Codex"
         create_directory_structure(codex_dir)
-        create_wrapper_scripts(codex_dir / "hooks")
-        copy_hook_files(codex_dir / "hooks")
+        create_env_shims(codex_dir / "hooks")
         create_claude_settings(codex_dir)
         create_readme(codex_dir / "hooks")
         create_gitignore(codex_dir)

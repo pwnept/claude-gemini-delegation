@@ -57,7 +57,7 @@ def find_agent_dir(start: Path) -> Path:
     # each environment gets isolated metrics/state rather than both writing
     # to .claude/.
     script_parent = Path(__file__).resolve().parent.parent
-    if script_parent.name in (".claude", ".Codex"):
+    if script_parent.name in (".claude", ".Codex", ".gemini-delegation"):
         return script_parent
 
     current = start.resolve()

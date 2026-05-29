@@ -17,7 +17,10 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # Derive hook prefix from script location so guidance is correct whether
 # the script lives in .claude/hooks/ or .Codex/hooks/.
-_HOOK_PREFIX = Path(__file__).resolve().parent.parent.name + "/hooks"
+_HOOK_PREFIX = (
+    os.environ.get("DELEGATION_HOOK_PREFIX")
+    or Path(__file__).resolve().parent.parent.name + "/hooks"
+)
 
 PATTERNS = [
     (re.compile(r"\bnpm\s+ls\b"), "npm ls"),
