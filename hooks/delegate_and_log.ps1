@@ -39,12 +39,13 @@ function Invoke-Python3 {
     $script:LastPythonExitCode = 127
 }
 
-$promptArgs = @("$ScriptDir/pre_delegate.py", $Task, $Context)
+$promptArgs = @("$ScriptDir/pre_delegate.py", "-", $Context)
 if ($MaxLines -gt 0) {
     $promptArgs += "$MaxLines"
 }
 
-$prompt = Invoke-Python3 -PythonArgs $promptArgs
+# Pass Task via stdin to avoid PowerShell arg splitting/length issues
+$prompt = $Task | Invoke-Python3 -PythonArgs $promptArgs
 $preExitCode = $script:LastPythonExitCode
 if ($preExitCode -ne 0 -or -not $prompt) {
     Write-Error "pre_delegate.py failed or produced no output."
@@ -56,9 +57,9 @@ $delegateArgs = @("$ScriptDir/gemini_delegate.py")
 if ($Profile -ne "default") {
     $delegateArgs += @("--profile", $Profile)
 }
-$delegateArgs += $promptText
 
-$response = Invoke-Python3 -PythonArgs $delegateArgs
+# Pass Prompt via stdin to avoid command line length limits (8KB)
+$response = $promptText | Invoke-Python3 -PythonArgs $delegateArgs
 $delegateExitCode = $script:LastPythonExitCode
 $responseText = $response -join "`n"
 

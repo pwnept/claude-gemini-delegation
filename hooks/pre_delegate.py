@@ -13,8 +13,23 @@ Example:
 
 import sys
 import re
+import os
+from pathlib import Path
 
 TaskType = str
+
+
+def expand_paths(task: str) -> str:
+    """Detect @path patterns and resolve them to absolute paths if they exist."""
+    def replacer(match):
+        path_str = match.group(1)
+        # Try to resolve relative to current directory
+        p = Path(path_str)
+        if p.exists():
+            return f"@{p.resolve()}"
+        return f"@{path_str}"
+
+    return re.sub(r'@([\w\.\-/\\ ]+)', replacer, task)
 
 
 def detect_task_type(task: str) -> TaskType:
@@ -128,8 +143,16 @@ def main():
         sys.exit(1)
     
     task = sys.argv[1]
+    if task == "-" or not task:
+        task = sys.stdin.read().strip()
+    
     context = sys.argv[2] if len(sys.argv) > 2 else "General task"
+    # Note: max_lines remains as sys.argv[3] if task was '-', 
+    # so we might need to adjust indices if we change how delegate_and_log calls it.
     max_lines = int(sys.argv[3]) if len(sys.argv) > 3 else None
+    
+    # Expand @ paths in task
+    task = expand_paths(task)
     
     # Detect task type and optimal compression
     task_type = detect_task_type(task)

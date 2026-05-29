@@ -141,6 +141,8 @@ def resolve_gemini_command() -> str:
     return shutil.which("gemini") or "gemini"
 
 
+import tempfile
+
 def run_gemini(
     command: str,
     model: str,
@@ -159,69 +161,81 @@ def run_gemini(
     env = os.environ.copy()
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
-    proc = subprocess.Popen(
-        [command, "--skip-trust", "--model", model, "-p", prompt],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
+    # Use a temporary file for the prompt to avoid command line length limits
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", encoding="utf-8", delete=False) as tf:
+        tf.write(prompt)
+        temp_prompt_file = tf.name
 
-    stdout_chunks: list = []
-    stderr_chunks: list = []
-    last_activity = [time.monotonic()]
-
-    def _drain(stream, collector):
-        for chunk in iter(lambda: stream.read(256), ""):
-            collector.append(chunk)
-            last_activity[0] = time.monotonic()
-        stream.close()
-
-    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
-    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
-    t_out.start()
-    t_err.start()
-
-    start = time.monotonic()
-    kill_reason = None
-
-    while proc.poll() is None:
-        now = time.monotonic()
-        if idle_timeout > 0 and (now - last_activity[0]) >= idle_timeout:
-            kill_reason = "idle"
-            proc.kill()
-            break
-        if timeout > 0 and (now - start) >= timeout:
-            kill_reason = "max"
-            proc.kill()
-            break
-        time.sleep(0.5)
-
-    t_out.join(timeout=5)
-    t_err.join(timeout=5)
-
-    stdout = "".join(stdout_chunks)
-    stderr = "".join(stderr_chunks)
-
-    if kill_reason:
-        elapsed = time.monotonic() - start
-        secs = idle_timeout if kill_reason == "idle" else timeout
-        raise subprocess.TimeoutExpired(
-            cmd=[command, "--model", model],
-            timeout=secs,
-            output=stdout,
-            stderr=stderr,
+    try:
+        proc = subprocess.Popen(
+            [command, "--skip-trust", "--model", model, "-p", f"@{temp_prompt_file}"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
 
-    return subprocess.CompletedProcess(
-        args=[command, "--skip-trust", "--model", model, "-p", prompt],
-        returncode=proc.returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
+        stdout_chunks: list = []
+        stderr_chunks: list = []
+        last_activity = [time.monotonic()]
+
+        def _drain(stream, collector):
+            for chunk in iter(lambda: stream.read(256), ""):
+                collector.append(chunk)
+                last_activity[0] = time.monotonic()
+            stream.close()
+
+        t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
+        t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        start = time.monotonic()
+        kill_reason = None
+
+        while proc.poll() is None:
+            now = time.monotonic()
+            if idle_timeout > 0 and (now - last_activity[0]) >= idle_timeout:
+                kill_reason = "idle"
+                proc.kill()
+                break
+            if timeout > 0 and (now - start) >= timeout:
+                kill_reason = "max"
+                proc.kill()
+                break
+            time.sleep(0.5)
+
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+
+        stdout = "".join(stdout_chunks)
+        stderr = "".join(stderr_chunks)
+
+        if kill_reason:
+            elapsed = time.monotonic() - start
+            secs = idle_timeout if kill_reason == "idle" else timeout
+            raise subprocess.TimeoutExpired(
+                cmd=[command, "--model", model],
+                timeout=secs,
+                output=stdout,
+                stderr=stderr,
+            )
+
+        return subprocess.CompletedProcess(
+            args=[command, "--skip-trust", "--model", model, "-p", f"@{temp_prompt_file}"],
+            returncode=proc.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    finally:
+        if os.path.exists(temp_prompt_file):
+            try:
+                os.remove(temp_prompt_file)
+            except OSError:
+                pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -274,6 +288,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    
+    # Increase idle timeout for research profile if not explicitly overridden
+    if args.profile == "research" and args.idle_timeout_seconds == 60:
+        args.idle_timeout_seconds = 120
+    
     prompt = args.prompt if args.prompt is not None else sys.stdin.read()
     prompt = prompt.strip()
     if not prompt:
