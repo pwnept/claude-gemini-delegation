@@ -22,9 +22,6 @@ from pathlib import Path
 from typing import Dict, Set
 import stat
 
-MARKER_BEGIN = "> [claude-gemini-delegation:begin]"
-MARKER_END = "> [claude-gemini-delegation:end]"
-
 # Import the basic installer classes
 from pathlib import Path
 
@@ -242,7 +239,7 @@ def update_all_installations(source_hooks: Path):
 
         valid_installations.add(path_str)
         print_info(f"Updating: {path_str}")
-        
+
         for script in SHARED_HOOK_SCRIPTS:
             src = source_hooks / script
             if not src.exists():
@@ -251,9 +248,17 @@ def update_all_installations(source_hooks: Path):
             shutil.copy2(src, dest)
             if os.name != "nt":
                 dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        
-        # Rewrite wrappers just in case logic changed
+
+        # Rewrite shared wrappers in case logic changed
         _write_gemini_delegation_wrappers(hooks_dir)
+
+        # Refresh per-env shims and settings guards for .claude and .Codex
+        for env_dir_name in (".claude", ".Codex"):
+            env_dir = project_dir / env_dir_name
+            if env_dir.exists():
+                create_env_shims(env_dir / "hooks")
+                create_claude_settings(env_dir)
+
         # Ensure temp/ exists (no-op if already present)
         ensure_temp_dir(project_dir)
         updated_count += 1
@@ -378,7 +383,7 @@ def create_env_shims(hooks_dir: Path):
     (hooks_dir / "delegate.ps1").write_text(
         "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
         '$ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\\.."))\n'
-        '& (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegate.ps1") @args\n'
+        '$input | & (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegate.ps1") @args\n'
         "exit $LASTEXITCODE\n",
         encoding="utf-8",
     )
@@ -553,7 +558,7 @@ def create_claude_settings(base_dir: Path):
     settings_path = base_dir / "settings.json"
     hook_root = base_dir.name  # ".claude" or ".Codex"
     command = (
-        f"powershell -NoProfile -ExecutionPolicy Bypass -File {hook_root}/hooks/delegation_guard.ps1"
+        f'powershell -NoProfile -ExecutionPolicy Bypass -File "{hook_root}/hooks/delegation_guard.ps1"'
         if os.name == "nt"
         else f"python3 {hook_root}/hooks/delegation_guard.py"
     )
@@ -648,177 +653,6 @@ def build_routing_presets(config: Dict) -> Dict:
         }
     
     return presets
-
-
-def create_enhanced_claude_md(config: Dict, presets: Dict, base_dir: Path):
-    """Create or update CLAUDE.md with routing presets.
-
-    Uses begin/end markers so the managed delegation section can be updated
-    in-place without overwriting surrounding content added by the user.
-    A timestamped backup is created whenever an existing file is modified.
-    """
-    claude_md = base_dir / "CLAUDE.md"
-
-    enabled_clis = config.get("cli_configs", {})
-
-    if not enabled_clis:
-        managed_body = """# Claude Code Configuration
-
-## Delegation Status
-
-No external CLIs configured. Run `python3 setup.py` (or `py -3 setup.py` on Windows) to enable delegation.
-"""
-    else:
-        cli_list = "\n".join([
-            f"- **{v['name']}**: {v['description']}"
-            for v in enabled_clis.values()
-        ])
-
-        preset_list = "\n".join([
-            f"- **{name}**: Routes to `{p['cli']}`\n  Pattern: `{p['pattern']}`"
-            for name, p in presets.items()
-        ])
-
-        git_operations_example = ""
-        if "git_operations" in presets:
-            git_operations_example = """
-### Git Operations
-```bash
-# Auto-routes to Aider (if enabled)
-PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")
-aider -p "$PROMPT"
-```
-"""
-
-        managed_body = f"""# Claude Code Configuration
-
-## Enabled Delegation CLIs
-
-{cli_list}
-
-## Delegation Presets
-
-{preset_list}
-
-## Quick Delegation
-
-**On Windows always use the PowerShell tool — not Bash.** Git Bash cannot run `.ps1`
-scripts. When generating commands, use `PowerShell(...)` not `Bash(...)`.
-
-**Windows (PowerShell tool):**
-```powershell
-# Full pipeline with validation/metrics:
-& .claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
-
-# Or step by step:
-$prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
-$prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
-```
-
-**Unix/Mac (Bash):**
-```bash
-PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
-```
-
-## Subagent Policy
-
-Do **not** use Claude subagents for delegation work. Subagents spend Claude
-tokens and defeat this configuration's token-saving purpose.
-
-When a task matches any delegation preset, banned operation, or large-output
-condition, use the local hooks and Gemini CLI instead of spawning a Claude
-subagent. Only use Claude subagents when the user explicitly asks for Claude
-subagents by name.
-
-## Always Delegate To Gemini
-
-- Commands expected to produce more than 500 lines of output
-- `npm ls`, `pip list`, `pip freeze`, and verbose dependency listings
-- `git log` beyond 5 commits or broad git history analysis
-- Recursive searches such as `find`, `grep -r`, or repository-wide scans
-- Reading or analyzing 3 or more new files
-- Security audits, vulnerability scans, XSS/SQL injection/CSRF checks
-- Documentation lookup or web search. Use `gemini_delegate.py --profile research` so Gemini Pro is tried before Flash.
-- Broad codebase analysis, performance review, or inspection tasks
-
-## Delegation Workflow
-
-1. **Identify task type** - Security? Git ops? Analysis?
-2. **Check presets** - Is there a matching preset?
-3. **Use delegation hook** - Let the hook format the prompt
-4. **Execute with Gemini CLI** - Use `gemini_delegate.py`, not Claude subagents
-5. **Validate response** - Check quality with the post-delegation hook
-
-`.claude/settings.json` registers a PreToolUse Bash guard that blocks known
-high-output commands and returns delegation instructions. The guard is a
-backstop; still delegate proactively when the task matches these rules.
-
-## Routing Examples
-
-### Security Audit
-```bash
-# Auto-routes to Gemini (if enabled)
-PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
-```
-
-{git_operations_example}
-### Code Analysis
-```bash
-# Routes based on configured preference
-PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
-```
-
-### Research / Documentation / Web Search
-```powershell
-$prompt = & .claude/hooks/delegate.ps1 "find current docs for deployment limits" "Research task"
-$prompt | py -3 .claude/hooks/gemini_delegate.py --profile research
-
-# Or:
-.claude/hooks/delegate_and_log.ps1 "find current docs for deployment limits" "Research task" 10 -Profile research
-```
-
-## Weekly Maintenance
-
-```bash
-# Analyze delegation metrics
-python3 .claude/hooks/analyze_metrics.py
-
-# Review routing effectiveness
-# Update presets if needed
-```
-
-## Configuration
-
-To reconfigure delegation preferences, run the setup wizard again manually.
-
-This will let you enable/disable CLIs.
-"""
-
-    managed_section = f"{MARKER_BEGIN}\n{managed_body.strip()}\n{MARKER_END}\n"
-
-    if claude_md.exists():
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        backup_path = claude_md.with_name(f"CLAUDE.md.bak.{timestamp}")
-        shutil.copy2(claude_md, backup_path)
-        print_info(f"Backed up existing CLAUDE.md to {backup_path.name}")
-
-        existing = claude_md.read_text(encoding="utf-8")
-        if MARKER_BEGIN in existing and MARKER_END in existing:
-            before = existing[:existing.index(MARKER_BEGIN)]
-            after = existing[existing.index(MARKER_END) + len(MARKER_END):].lstrip("\n")
-            new_content = before + managed_section + after
-            print_info("Updated existing delegation section in CLAUDE.md")
-        else:
-            new_content = existing.rstrip("\n") + "\n\n" + managed_section
-            print_info("Appended delegation section to existing CLAUDE.md")
-    else:
-        new_content = managed_section
-
-    claude_md.write_text(new_content, encoding="utf-8")
-    print_success("Updated CLAUDE.md")
 
 
 def _build_claude_md_body(config: Dict, presets: Dict) -> str:
