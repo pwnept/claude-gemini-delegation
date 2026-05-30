@@ -219,6 +219,21 @@ then a verified Python 3 `python`) so they do not accidentally run Python 2.
 Claude Code also installs `.claude/settings.json` with a PreToolUse guard that
 blocks known high-output Bash commands and tells Claude to delegate them.
 
+### Subagent Policy
+
+Available Claude Code subagent types and their status:
+
+| Subagent | Cost | Status | Rule |
+|----------|------|--------|------|
+| `Plan` | Low | **Allowed** | Design-only; no file reads or web calls |
+| `statusline-setup` | Very low | **Allowed** | Single-purpose config; fully bounded |
+| `claude-code-guide` | Medium | Allowed | Claude Code / API questions; may use WebFetch |
+| `Explore` | High | **Banned** | Many file reads/greps — delegate to Gemini instead |
+| `general-purpose` | High | **Banned** | Uses WebSearch/WebFetch — use Gemini `--profile research` |
+| `claude` | Unpredictable | **Banned** | Catch-all; use Gemini for broad tasks |
+
+For delegation tasks, banned operations, or large-output work: use the Gemini hooks, not Claude subagents.
+
 Keep project-specific agent instructions outside this managed section. Rerunning
 setup updates only this block.
 """

@@ -160,6 +160,14 @@ def run_gemini(
     """
     env = os.environ.copy()
     env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+    env["NO_COLOR"] = "1"
+
+    # Point delegation subprocess at the fast settings file so startup-blocking
+    # work is skipped (no editor scan, no GPU telemetry, no MCP init for servers
+    # that are irrelevant to code/research delegation tasks).
+    fast_settings = Path(__file__).resolve().parent / "gemini_fast_settings.json"
+    if fast_settings.exists():
+        env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(fast_settings)
 
     # Use a temporary file for the prompt to avoid command line length limits
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", encoding="utf-8", delete=False) as tf:
@@ -238,6 +246,22 @@ def run_gemini(
                 pass
 
 
+def _try_save_response(output: str, model: str) -> None:
+    """Save response to temp/ in cwd if that directory exists."""
+    temp_dir = Path.cwd() / "temp"
+    if not temp_dir.is_dir():
+        return
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out_path = temp_dir / f"gemini-{ts}.md"
+    try:
+        with out_path.open("w", encoding="utf-8") as f:
+            f.write(f"<!-- model: {model} -->\n")
+            f.write(output)
+        print(f"[Saved to: {out_path}]", file=sys.stderr)
+    except OSError:
+        pass
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Gemini CLI with capacity-aware model fallback.")
     parser.add_argument("prompt", nargs="?", help="Prompt to send. If omitted, stdin is used.")
@@ -282,6 +306,11 @@ def parse_args() -> argparse.Namespace:
         "--show-model",
         action="store_true",
         help="Print the selected model to stderr on success.",
+    )
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Do not save response to temp/ even if the directory exists.",
     )
     return parser.parse_args()
 
@@ -352,6 +381,8 @@ def main() -> int:
             if args.show_model:
                 print("Gemini model used: {0}".format(model), file=sys.stderr)
             if output:
+                if not args.no_save:
+                    _try_save_response(output, model)
                 sys.stdout.write(output)
             if not args.no_state:
                 state.setdefault("cooldowns", {}).pop(model, None)

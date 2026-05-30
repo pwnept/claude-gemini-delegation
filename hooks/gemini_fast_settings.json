@@ -1,0 +1,14 @@
+{
+  "general": {
+    "preferredEditor": "vscode",
+    "enableAutoUpdate": false,
+    "enableAutoUpdateNotification": false
+  },
+  "telemetry": {
+    "enabled": false,
+    "logPrompts": false
+  },
+  "privacy": {
+    "usageStatisticsEnabled": false
+  }
+}

@@ -152,10 +152,18 @@ multi-file reading.
 
 Your `AGENTS.md` configures strict rules for when Claude or Codex MUST delegate:
 
-**Forbidden for delegation:**
-- Do not use Claude subagents for token-heavy delegation work
-- Do not replace Gemini delegation with Claude Task/subagent calls
-- Use Claude subagents only when the user explicitly asks for Claude subagents
+**Subagent policy — allowed vs. banned:**
+
+| Subagent | Cost | Status | Rule |
+|----------|------|--------|------|
+| `Plan` | Low | **Allowed** | Design-only; no file reads or web calls |
+| `statusline-setup` | Very low | **Allowed** | Single-purpose config; fully bounded |
+| `claude-code-guide` | Medium | Allowed | Claude Code / API questions; may use WebFetch |
+| `Explore` | High | **Banned** | Many file reads/greps — delegate to Gemini instead |
+| `general-purpose` | High | **Banned** | Uses WebSearch/WebFetch — use Gemini `--profile research` |
+| `claude` | Unpredictable | **Banned** | Catch-all; use Gemini for broad tasks |
+
+Never use a banned subagent where a Gemini delegation hook would do the job.
 
 **BANNED Operations (Always Delegate):**
 - Commands producing >500 lines of output
@@ -428,6 +436,35 @@ python3 setup.py --target /path/to/your/project
 
 ---
 
+## Bundled Agents
+
+### Dave — Code Review Agent
+
+`agents/code-review-agent-dave/` provides a Gemini-powered code reviewer that produces structured audit reports.
+
+| Script | Mode | Description |
+|--------|------|-------------|
+| `start-audit.ps1` | Interactive (`gemini chat --yolo`) | Live review session; good for iterating on findings |
+| `generate-audit.ps1` | Headless (`gemini --yolo`) | Exhaustive automated audit; flags everything pedantically |
+
+Both scripts auto-commit uncommitted changes before auditing, then save the report to `audit/<model>_audit_<datetime>_<hash>.md`. The `audit/` folder is gitignored.
+
+Run from the project root:
+```powershell
+.\agents\code-review-agent-dave\generate-audit.ps1   # headless
+.\agents\code-review-agent-dave\start-audit.ps1      # interactive
+```
+
+The installer copies `agents/` to any target project (`python setup.py --target <dir>`).
+
+## Response Files
+
+After install, a `temp/` directory is created at the project root.
+`gemini_delegate.py` automatically saves every successful Gemini response to
+`temp/gemini-{timestamp}.md` (model name in the header comment).
+`temp/gemini-*.md` is gitignored; `temp/.gitkeep` is tracked so the directory
+survives clones.  Pass `--no-save` to skip saving for a single call.
+
 ## Project Structure
 ```
 claude-gemini-delegation/
@@ -436,9 +473,11 @@ claude-gemini-delegation/
 |   |-- post_delegate.py
 |   |-- analyze_metrics.py
 |   |-- gemini_delegate.py
+|   |-- gemini_fast_settings.json  # Delegation-only Gemini settings (no MCP, no telemetry)
 |   |-- delegation_guard.py
 |   |-- delegation_guard.ps1
 |   `-- delegate_and_log.ps1
+|-- temp/                      # Auto-created; stores delegation response .md files
 |-- tests/
 |   |-- test_install.py
 |   `-- regression/

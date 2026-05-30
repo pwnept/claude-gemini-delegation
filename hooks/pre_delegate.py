@@ -71,6 +71,13 @@ def estimate_compression(task: str) -> int:
     return 10
 
 
+_POWERSHELL_NOTE = (
+    "PLATFORM: Windows PowerShell 5.1. "
+    "Do NOT use && — it is unsupported. "
+    "Use ; for sequential commands or `if ($LASTEXITCODE -eq 0) { ... }` for conditional chaining."
+)
+
+
 def build_shell_prompt(task: str, context: str, max_lines: int) -> str:
     """Build optimized prompt for shell command distillation."""
     return f"""CONTEXT: {context}
@@ -79,7 +86,8 @@ OUTPUT: Extract only:
 - Key findings (max 3 bullet points)
 - Actionable next steps (1-2 items)
 - Any errors/warnings
-Total response: <{max_lines} lines"""
+Total response: <{max_lines} lines
+{_POWERSHELL_NOTE}"""
 
 
 def build_search_prompt(task: str, context: str, max_lines: int) -> str:
@@ -90,7 +98,8 @@ OUTPUT: Return ONLY:
 - File paths where found (no code snippets)
 - Count of occurrences
 - 1-line assessment
-Maximum {max_lines} lines"""
+Maximum {max_lines} lines
+{_POWERSHELL_NOTE}"""
 
 
 def build_analyze_prompt(task: str, context: str, max_lines: int) -> str:
@@ -101,7 +110,8 @@ OUTPUT FORMAT:
 - Main finding (1 sentence)
 - Supporting evidence (2-3 lines)
 - Recommended action
-Maximum {max_lines} lines total"""
+Maximum {max_lines} lines total
+{_POWERSHELL_NOTE}"""
 
 
 def build_docs_prompt(task: str, context: str, max_lines: int) -> str:
@@ -112,14 +122,16 @@ OUTPUT:
 - Code example (3-5 lines max)
 - Key parameter explanation (1 sentence)
 - Official docs link
-Total: <{max_lines} lines"""
+Total: <{max_lines} lines
+{_POWERSHELL_NOTE}"""
 
 
 def build_generic_prompt(task: str, context: str, max_lines: int) -> str:
     """Build generic optimized prompt."""
     return f"""CONTEXT: {context}
 TASK: {task}
-OUTPUT: Be concise and actionable. Maximum {max_lines} lines."""
+OUTPUT: Be concise and actionable. Maximum {max_lines} lines.
+{_POWERSHELL_NOTE}"""
 
 
 def build_prompt(task_type: TaskType, task: str, context: str, max_lines: int) -> str:

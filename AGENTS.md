@@ -74,6 +74,21 @@ PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimi
 gemini --model gemini-2.5-flash -p "$PROMPT"
 ```
 
+## Subagent Policy
+
+Available Claude Code subagent types and their status:
+
+| Subagent | Cost | Status | Rule |
+|----------|------|--------|------|
+| `Plan` | Low | **Allowed** | Design-only; no file reads or web calls |
+| `statusline-setup` | Very low | **Allowed** | Single-purpose config; fully bounded |
+| `claude-code-guide` | Medium | Allowed | Claude Code / API questions; may use WebFetch |
+| `Explore` | High | **Banned** | Many file reads/greps — delegate to Gemini instead |
+| `general-purpose` | High | **Banned** | Uses WebSearch/WebFetch — use Gemini `--profile research` |
+| `claude` | Unpredictable | **Banned** | Catch-all; use Gemini for broad tasks |
+
+For delegation tasks, banned operations, or large-output work: use the Gemini hooks, not Claude subagents.
+
 ## Weekly Maintenance
 
 ```bash

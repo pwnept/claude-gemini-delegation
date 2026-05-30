@@ -2,6 +2,12 @@
 .claude/metrics/
 metrics/
 
+# Delegation response files
+temp/gemini-*.md
+
+# Dave code audit reports
+audit/
+
 # Python
 __pycache__/
 *.py[cod]
