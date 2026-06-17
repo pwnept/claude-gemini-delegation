@@ -343,6 +343,16 @@ def main() -> int:
             hard = args.timeout_seconds
             error_text = "Timed out (idle>{0}s or >{1}s total)".format(idle, hard)
             print("{0}: {1}".format(model, error_text), file=sys.stderr)
+
+            captured = ((exc.output or "") + "\n" + (exc.stderr or "")).strip()
+            if captured:
+                snippet = captured[-2000:]
+                print("--- last output before kill ---", file=sys.stderr)
+                print(snippet, file=sys.stderr)
+                print("--- end captured output ---", file=sys.stderr)
+                if capacity_limited(captured):
+                    error_text = captured
+
             mark_cooldown(model, state, error_text, time.time(), args.cooldown_seconds)
             continue
 
