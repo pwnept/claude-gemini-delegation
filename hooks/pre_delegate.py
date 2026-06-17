@@ -16,6 +16,11 @@ import re
 import os
 from pathlib import Path
 
+if hasattr(sys.stdin, "reconfigure"):
+    # PowerShell prepends a UTF-8 BOM when piping a string to a native
+    # process; utf-8-sig strips it so a leading U+FEFF doesn't pollute the task text.
+    sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
+
 TaskType = str
 
 
@@ -75,6 +80,7 @@ def build_shell_prompt(task: str, context: str, max_lines: int) -> str:
     """Build optimized prompt for shell command distillation."""
     return f"""CONTEXT: {context}
 TASK: Execute this command and distill the output: {task}
+SHELL TARGET: PowerShell 7 (pwsh.exe). Use && for sequential-on-success, ; for unconditional sequence. Use $env:USERPROFILE not hardcoded paths. Avoid PS5.1-only workarounds.
 OUTPUT: Extract only:
 - Key findings (max 3 bullet points)
 - Actionable next steps (1-2 items)

@@ -300,7 +300,7 @@ def create_env_shims(hooks_dir: Path):
         "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
         '$ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\\.."))\n'
         f'$env:DELEGATION_HOOK_PREFIX = "{env_dir_name}/hooks"\n'
-        "$InputPayload = [Console]::In.ReadToEnd()\n"
+        "$InputPayload = ($input | Out-String).TrimEnd()\n"
         '$InputPayload | & (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegation_guard.ps1")\n'
         "exit $LASTEXITCODE\n",
         encoding="utf-8",

@@ -22,6 +22,10 @@ import threading
 import time
 from pathlib import Path
 
+if hasattr(sys.stdin, "reconfigure"):
+    # PowerShell prepends a UTF-8 BOM when piping a string to a native
+    # process; utf-8-sig strips it so a leading U+FEFF doesn't pollute the prompt.
+    sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")

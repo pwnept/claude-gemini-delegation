@@ -1,6 +1,6 @@
 # PowerShell launcher for delegation_guard.py.
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$InputPayload = [Console]::In.ReadToEnd()
+$InputPayload = ($input | Out-String).TrimEnd()
 
 $PythonCommands = @(
     @{ Command = "py"; Prefix = @("-3") },
