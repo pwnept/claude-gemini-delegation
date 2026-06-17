@@ -62,18 +62,18 @@ def find_agent_dir(start: Path) -> Path:
     hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
     if hook_prefix:
         prefix_path = Path(hook_prefix)
-        if prefix_path.parent.name in (".claude", ".Codex"):
+        if prefix_path.parent.name in (".claude", ".Codex", ".codex"):
             return prefix_path.parent
 
     # 2. Use script's own parent dir if it is a known agent dir
     script_parent = Path(__file__).resolve().parent.parent
-    if script_parent.name in (".claude", ".Codex", ".gemini-delegation"):
+    if script_parent.name in (".claude", ".Codex", ".codex", ".gemini-delegation"):
         return script_parent
 
     # 3. Search up the tree
     current = start.resolve()
     for directory in (current, *current.parents):
-        for name in (".gemini-delegation", ".claude", ".Codex"):
+        for name in (".gemini-delegation", ".claude", ".Codex", ".codex"):
             candidate = directory / name
             if candidate.exists():
                 return candidate

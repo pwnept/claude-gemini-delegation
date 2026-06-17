@@ -300,7 +300,11 @@ def create_env_shims(hooks_dir: Path):
         "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
         '$ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\\.."))\n'
         f'$env:DELEGATION_HOOK_PREFIX = "{env_dir_name}/hooks"\n'
-        "$InputPayload = ($input | Out-String).TrimEnd()\n"
+        "if ($MyInvocation.ExpectingInput) {\n"
+        "    $InputPayload = ($input | Out-String).TrimEnd()\n"
+        "} else {\n"
+        "    $InputPayload = \"\"\n"
+        "}\n"
         '$InputPayload | & (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegation_guard.ps1")\n'
         "exit $LASTEXITCODE\n",
         encoding="utf-8",
@@ -443,7 +447,7 @@ def create_claude_settings(base_dir: Path):
     settings_path = base_dir / "settings.json"
     hook_root = base_dir.name  # ".claude" or ".Codex"
     command = (
-        f"powershell -NoProfile -ExecutionPolicy Bypass -File {hook_root}/hooks/delegation_guard.ps1"
+        f"pwsh -NoProfile -ExecutionPolicy Bypass -File {hook_root}/hooks/delegation_guard.ps1"
         if os.name == "nt"
         else f"python3 {hook_root}/hooks/delegation_guard.py"
     )
@@ -490,12 +494,17 @@ def create_claude_settings(base_dir: Path):
     for matcher in matchers_needed:
         pre_tool_use.append({"matcher": matcher, "hooks": [hook_def]})
 
+    new_settings_text = json.dumps(settings, indent=2) + "\n"
     if settings_path.exists():
+        if settings_path.read_text(encoding="utf-8") == new_settings_text:
+            print_success(f"{hook_root}/settings.json delegation guard already up to date")
+            return
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = settings_path.with_name(f"settings.json.bak.{timestamp}")
         shutil.copy2(settings_path, backup_path)
 
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    settings_path.write_text(new_settings_text, encoding="utf-8")
     print_success(f"Updated {hook_root}/settings.json delegation guard (Bash + PowerShell)")
 
 
@@ -690,11 +699,6 @@ This will let you enable/disable CLIs.
     managed_section = f"{MARKER_BEGIN}\n{managed_body.strip()}\n{MARKER_END}\n"
 
     if claude_md.exists():
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        backup_path = claude_md.with_name(f"CLAUDE.md.bak.{timestamp}")
-        shutil.copy2(claude_md, backup_path)
-        print_info(f"Backed up existing CLAUDE.md to {backup_path.name}")
-
         existing = claude_md.read_text(encoding="utf-8")
         if MARKER_BEGIN in existing and MARKER_END in existing:
             before = existing[:existing.index(MARKER_BEGIN)]
@@ -704,6 +708,15 @@ This will let you enable/disable CLIs.
         else:
             new_content = existing.rstrip("\n") + "\n\n" + managed_section
             print_info("Appended delegation section to existing CLAUDE.md")
+
+        if new_content == existing:
+            print_success("CLAUDE.md delegation section already up to date")
+            return
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = claude_md.with_name(f"CLAUDE.md.bak.{timestamp}")
+        shutil.copy2(claude_md, backup_path)
+        print_info(f"Backed up existing CLAUDE.md to {backup_path.name}")
     else:
         new_content = managed_section
 

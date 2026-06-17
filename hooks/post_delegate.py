@@ -145,7 +145,7 @@ def main():
     hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
     if hook_prefix:
         prefix_path = Path(hook_prefix)
-        if prefix_path.parent.name in (".claude", ".Codex"):
+        if prefix_path.parent.name in (".claude", ".Codex", ".codex"):
             agent_dir = prefix_path.parent
 
     # 2. Search up the tree (.gemini-delegation preferred over .claude)

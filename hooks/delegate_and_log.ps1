@@ -12,7 +12,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:LastPythonExitCode = 0
 
 function Invoke-Python3 {
-    param([string[]]$PythonArgs)
+    param(
+        [string[]]$PythonArgs,
+        [AllowNull()][string]$InputText
+    )
 
     $candidates = @(
         @{ Command = "py"; Prefix = @("-3") },
@@ -30,7 +33,11 @@ function Invoke-Python3 {
             continue
         }
 
-        & $candidate.Command @($candidate.Prefix + $PythonArgs)
+        if ($PSBoundParameters.ContainsKey("InputText")) {
+            $InputText | & $candidate.Command @($candidate.Prefix + $PythonArgs)
+        } else {
+            & $candidate.Command @($candidate.Prefix + $PythonArgs)
+        }
         $script:LastPythonExitCode = $LASTEXITCODE
         return
     }
@@ -45,7 +52,7 @@ if ($MaxLines -gt 0) {
 }
 
 # Pass Task via stdin to avoid PowerShell arg splitting/length issues
-$prompt = $Task | Invoke-Python3 -PythonArgs $promptArgs
+$prompt = Invoke-Python3 -PythonArgs $promptArgs -InputText $Task
 $preExitCode = $script:LastPythonExitCode
 if ($preExitCode -ne 0 -or -not $prompt) {
     Write-Error "pre_delegate.py failed or produced no output."
@@ -59,7 +66,7 @@ if ($Profile -ne "default") {
 }
 
 # Pass Prompt via stdin to avoid command line length limits (8KB)
-$response = $promptText | Invoke-Python3 -PythonArgs $delegateArgs
+$response = Invoke-Python3 -PythonArgs $delegateArgs -InputText $promptText
 $delegateExitCode = $script:LastPythonExitCode
 $responseText = $response -join "`n"
 

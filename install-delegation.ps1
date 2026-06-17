@@ -148,14 +148,19 @@ function Test-DelegationInstall {
 
     $guard = Join-Path $TargetDir ".claude\hooks\delegation_guard.ps1"
     $guardArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $guard)
+    $powerShellHost = if (Get-Command "pwsh" -ErrorAction SilentlyContinue) {
+        "pwsh"
+    } else {
+        "powershell"
+    }
 
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        '{"tool_name":"Bash","tool_input":{"command":"npm ls"}}' | powershell @guardArgs 2>$null | Out-Null
+        '{"tool_name":"Bash","tool_input":{"command":"npm ls"}}' | & $powerShellHost @guardArgs 2>$null | Out-Null
         $blockedExitCode = $LASTEXITCODE
 
-        '{"tool_name":"Bash","tool_input":{"command":"git status --short"}}' | powershell @guardArgs 2>$null | Out-Null
+        '{"tool_name":"Bash","tool_input":{"command":"git status --short"}}' | & $powerShellHost @guardArgs 2>$null | Out-Null
         $allowedExitCode = $LASTEXITCODE
     }
     finally {
