@@ -1,6 +1,6 @@
 """
-Unit tests for Gemini model fallback runner.
-Run with: python -m unittest discover tests
+Unit tests for agy model fallback runner.
+Run with: python3 -m unittest discover tests
 """
 
 import sys
@@ -41,8 +41,8 @@ class TestGeminiDelegate(unittest.TestCase):
             return FakeResult(0, stdout="ok from lite\n")
 
         with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--models", "flash,lite", "--no-state", "hello"]):
-            with mock.patch.object(gemini_delegate, "resolve_gemini_command", return_value="gemini.cmd"):
-                with mock.patch.object(gemini_delegate, "run_gemini", side_effect=fake_run):
+            with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
+                with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
                     with mock.patch.object(sys.stdout, "write") as write:
                         code = gemini_delegate.main()
 
@@ -58,13 +58,13 @@ class TestGeminiDelegate(unittest.TestCase):
             return FakeResult(0, stdout="ok\n")
 
         with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--profile", "research", "--no-state", "hello"]):
-            with mock.patch.object(gemini_delegate, "resolve_gemini_command", return_value="gemini.cmd"):
-                with mock.patch.object(gemini_delegate, "run_gemini", side_effect=fake_run):
+            with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
+                with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
                     with mock.patch.object(sys.stdout, "write"):
                         code = gemini_delegate.main()
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls, ["gemini-3.1-pro-preview"])
+        self.assertEqual(calls, ["Gemini 3.1 Pro (Low)"])
 
 
 if __name__ == "__main__":

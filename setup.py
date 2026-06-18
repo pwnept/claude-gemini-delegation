@@ -67,7 +67,9 @@ SHARED_HOOK_SCRIPTS = [
     "delegation_guard.py",
     "delegation_guard.ps1",
     "delegate_and_log.ps1",
-    "gemini_fast_settings.json",
+    "delegate",
+    "delegate.ps1",
+    "delegate.bat",
 ]
 
 
@@ -434,7 +436,9 @@ def copy_hook_files(dest_dir: Path):
         "delegation_guard.py",
         "delegation_guard.ps1",
         "delegate_and_log.ps1",
-        "gemini_fast_settings.json",
+        "delegate",
+        "delegate.ps1",
+        "delegate.bat",
     ]
     
     copied_count = 0
@@ -745,7 +749,7 @@ run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(..
 **Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+echo "$PROMPT" | python3 .claude/hooks/gemini_delegate.py
 ```
 {git_ops_example}
 `.claude/settings.json` registers a PreToolUse Bash guard that blocks known
@@ -776,12 +780,12 @@ echo "Generated prompt:"
 echo "$PROMPT"
 echo ""
 
-# 2. Execute with Gemini (or other CLI)
-echo "Executing with Gemini..."
-# gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+# 2. Execute with agy
+echo "Executing with agy..."
+# echo "$PROMPT" | python3 ../{hook_root}/hooks/gemini_delegate.py
 
 # 3. Validate response (after execution)
-# RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
+# RESPONSE=$(echo "$PROMPT" | python3 ../{hook_root}/hooks/gemini_delegate.py)
 # python3 ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 10 "build-analysis"
 """, encoding="utf-8")
     
@@ -802,7 +806,7 @@ PROMPT=$(python3 ../{hook_root}/hooks/pre_delegate.py \
   8)
 
 echo "Running security audit..."
-RESPONSE=$(gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT")
+RESPONSE=$(echo "$PROMPT" | python3 ../{hook_root}/hooks/gemini_delegate.py)
 
 # Validate and save results
 python3 ../{hook_root}/hooks/post_delegate.py "$RESPONSE" 8 "security-audit"

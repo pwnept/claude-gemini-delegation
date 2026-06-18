@@ -56,7 +56,7 @@ fi
 
 # Assert 2: Claude should NOT delegate code generation (NEGATIVE TEST)
 echo -n "Assert 2: Claude did NOT delegate... "
-if echo "$OUTPUT" | grep -qi "gemini"; then
+if echo "$OUTPUT" | grep -qiE "(gemini|agy)"; then
   echo -e "${RED}FAIL${NC} (Unexpected delegation - Claude should handle this)"
   PASS=false
   DELEGATED=true

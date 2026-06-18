@@ -544,7 +544,7 @@ run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(..
 **Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-gemini --model """ + DEFAULT_GEMINI_MODEL + """ -p "$PROMPT"
+echo "$PROMPT" | python3 .claude/hooks/gemini_delegate.py
 ```
 
 The PowerShell wrappers resolve Python 3 explicitly (`py -3`, then `python3`,
@@ -775,7 +775,7 @@ def print_next_steps(claude_dir, is_user_install):
         print("   .claude\\hooks\\delegate_and_log.ps1 \"git status\" \"Test delegation\" 5")
     else:
         print("   PROMPT=$(" + test_cmd + ")")
-        print("   gemini --model " + DEFAULT_GEMINI_MODEL + ' -p "$PROMPT"')
+        print('   echo "$PROMPT" | python3 .claude/hooks/gemini_delegate.py')
 
     print("\nDocumentation:")
     print("   " + str(claude_dir / "hooks" / "README.md"))

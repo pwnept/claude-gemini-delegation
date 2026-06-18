@@ -31,12 +31,12 @@ echo ""
 
 # Check for required dependencies
 echo "Checking dependencies..."
-echo -n "- gemini CLI: "
-if command -v gemini &> /dev/null; then
+echo -n "- agy CLI: "
+if command -v agy &> /dev/null; then
   echo -e "${GREEN}OK${NC}"
 else
   echo -e "${RED}MISSING${NC}"
-  echo "Please install gemini CLI: npm install -g @google/gemini-cli"
+  echo "Please install agy (Antigravity IDE) from https://antigravity.dev"
   exit 1
 fi
 

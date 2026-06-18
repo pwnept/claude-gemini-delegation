@@ -1,9 +1,9 @@
-# Claude Code + Gemini Delegation
+# Claude Code + agy Delegation
 
-**Preserve 50-70% of your Claude Code token quota** by delegating high-cost operations to Gemini CLI.
+**Preserve 50-70% of your Claude Code token quota** by delegating high-cost operations to agy (Antigravity), which routes to Gemini and other models via Google AI Pro.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#)
 
 ## The Problem
@@ -17,11 +17,11 @@ Claude Code Pro users hit a hard wall:
 
 ## The Solution
 
-Delegate token-heavy operations to Gemini CLI (generous free tier) while Claude handles high-value reasoning.
+Delegate token-heavy operations to agy (which routes to Gemini models via Google AI Pro) while Claude handles high-value reasoning.
 
 **Simple math:**
 - Reading 2,000 lines yourself: **2,000 tokens**
-- Delegating to Gemini: **~150 tokens**
+- Delegating to agy: **~150 tokens**
 - **Savings: 92% per operation**
 
 ---
@@ -30,9 +30,10 @@ Delegate token-heavy operations to Gemini CLI (generous free tier) while Claude 
 
 ### Prerequisites
 
-- **Python 3.6+** (no additional packages required)
+- **Python 3.8+**
 - **Claude Code** installed
-- **Gemini CLI:** `npm install -g @google/gemini-cli`
+- **agy (Antigravity IDE):** download from [antigravity.dev](https://antigravity.dev) and sign in with a Google AI Pro account
+- **pywinpty** (Windows only, for subprocess capture): `pip3 install pywinpty`
 
 ### Installation
 
@@ -78,16 +79,15 @@ To install into the current working directory, run:
 python3 setup.py
 ```
 
-The default installer enables only Gemini CLI, even if other supported CLIs are installed. Enable extra CLIs explicitly when you want them:
+The default installer enables only agy, even if other supported CLIs are installed. Enable extra CLIs explicitly when you want them:
 ```bash
 python3 setup.py --enable-cli aider
-python3 setup.py --enable-cli copilot
 python3 setup.py --all-clis
 ```
 
 On Windows, generated examples use `gemini_delegate.py`, which calls
-`gemini.cmd` and falls back across Gemini 3 Flash, 2.5 Flash, 3.1 Flash Lite,
-2.5 Flash Lite, and 2.5 Pro model pools when Gemini reports capacity or 429 errors. Windows
+`agy.exe` via pywinpty ConPTY and falls back across Gemini 3.5 Flash and
+3.1 Pro model pools when agy reports capacity errors. Windows
 wrappers resolve Python 3 explicitly (`py -3`, then `python3`, then a verified
 Python 3 `python`) so machines with Python 2 on `PATH` do not silently break.
 
@@ -134,9 +134,10 @@ python3 setup_hooks.py
 # - pre_delegate.py (prompt formatter)
 # - post_delegate.py (response validator)
 # - analyze_metrics.py (usage analyzer)
-# - gemini_delegate.py (Gemini model fallback runner)
+# - gemini_delegate.py (agy model fallback runner)
 # - delegate_and_log.ps1 (PowerShell full pipeline with metrics)
 # - delegation_guard.py / .ps1 (Claude Code PreToolUse guard)
+# - delegate / delegate.ps1 / delegate.bat (OS-specific shims)
 ```
 
 **Note:** The generated instructions are the main routing control. The Claude
@@ -159,11 +160,11 @@ Your `AGENTS.md` configures strict rules for when Claude or Codex MUST delegate:
 | `Plan` | Low | **Allowed** | Design-only; no file reads or web calls |
 | `statusline-setup` | Very low | **Allowed** | Single-purpose config; fully bounded |
 | `claude-code-guide` | Medium | Allowed | Claude Code / API questions; may use WebFetch |
-| `Explore` | High | **Banned** | Many file reads/greps — delegate to Gemini instead |
-| `general-purpose` | High | **Banned** | Uses WebSearch/WebFetch — use Gemini `--profile research` |
-| `claude` | Unpredictable | **Banned** | Catch-all; use Gemini for broad tasks |
+| `Explore` | High | **Banned** | Many file reads/greps — delegate to agy instead |
+| `general-purpose` | High | **Banned** | Uses WebSearch/WebFetch — use agy `--profile research` |
+| `claude` | Unpredictable | **Banned** | Catch-all; use agy for broad tasks |
 
-Never use a banned subagent where a Gemini delegation hook would do the job.
+Never use a banned subagent where an agy delegation hook would do the job.
 
 **BANNED Operations (Always Delegate):**
 - Commands producing >500 lines of output
@@ -196,10 +197,10 @@ Total cost: 2,000 tokens
 User: "Check npm dependencies"
 Claude: I'll delegate this to preserve your quota:
 
-PROMPT=$(python3 .claude/hooks/pre_delegate.py "npm ls" "Build analysis" 8)
-gemini --model gemini-2.5-flash -p "$PROMPT"
+$prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
+$prompt | python3 .claude/hooks/gemini_delegate.py
 
-[Gemini reads 1,847 lines, returns 150-token summary]
+[agy reads 1,847 lines via Gemini, returns 150-token summary]
 Total cost: 150 tokens (92% savings!)
 ```
 
@@ -242,7 +243,7 @@ python3 setup.py
 
 # Interactive installer:
 # - Detects installed CLIs
-# - Enables Gemini by default; extra CLIs require --enable-cli or --all-clis
+# - Enables agy by default; extra CLIs require --enable-cli or --all-clis
 # - Installs or updates AGENTS.md, CLAUDE.md, .claude, and .Codex hook roots
 ```
 
@@ -276,13 +277,13 @@ python3 setup_hooks.py
 |----------|---------|-------|
 | **Linux** | Full | Native bash support |
 | **macOS** | Full | Native bash support |
-| **Windows** | Full | PowerShell, CMD, and Git Bash supported |
+| **Windows** | Full | PowerShell, CMD, and Git Bash supported; requires pywinpty |
 
 ### Python Version Requirement
 
-- **Minimum:** Python 3.6
-- **Recommended:** Python 3.8+
-- **No additional packages required** (stdlib only)
+- **Minimum:** Python 3.8
+- **Recommended:** Python 3.10+
+- **Windows additional package:** `pip3 install pywinpty` (for agy ConPTY capture)
 
 ---
 
@@ -305,7 +306,7 @@ Update this periodically during your session. When status is WARNING, delegation
 When Claude doesn't auto-delegate, you can explicitly request it:
 
 ```
-User: "Use Gemini to scan for security issues"
+User: "Use agy to scan for security issues"
 ```
 
 Claude will comply with explicit delegation requests.
@@ -315,13 +316,13 @@ Claude will comply with explicit delegation requests.
 For better results, provide context in your requests:
 
 ```
-User: "We're deploying tomorrow. Scan @src/ for hardcoded credentials and API keys. Use Gemini."
+User: "We're deploying tomorrow. Scan @src/ for hardcoded credentials and API keys. Use agy."
 ```
 
 ### PowerShell Full Pipeline
 
 On Windows, use `delegate_and_log.ps1` when you want prompt formatting,
-Gemini fallback, response validation, and metrics in one command:
+agy fallback, response validation, and metrics in one command:
 
 ```powershell
 .claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
@@ -375,24 +376,43 @@ python3 .claude/hooks/analyze_metrics.py
 
 4. **Be explicit:**
    ```
-   User: "Use Gemini to check dependencies"
+   User: "Use agy to check dependencies"
    ```
 
-### Gemini Not Installed
+### agy Not Installed or Not Responding
 
-**Problem:** Claude tries to delegate but Gemini isn't available.
+**Problem:** Claude tries to delegate but agy isn't available or returns empty output.
 
-**Solution:**
+**Solutions:**
 ```bash
-# Install Gemini CLI
-npm install -g @google/gemini-cli
+# Verify agy is installed and on PATH
+agy --version
 
-# Verify installation
-gemini --version
+# Windows: agy is typically at
+# C:\Users\<user>\AppData\Local\agy\bin\agy.exe
 
-# Set API key
-export GEMINI_API_KEY="your-key-here"
-# Add to ~/.bashrc or ~/.zshrc for persistence
+# Install pywinpty (Windows — required for subprocess output capture)
+pip3 install pywinpty
+
+# Sign in interactively first if not yet authed
+agy
+```
+
+agy writes output to the Windows console (CONOUT$) rather than stdout. The
+`gemini_delegate.py` script captures it via pywinpty ConPTY. If you see empty
+output, ensure pywinpty is installed.
+
+### Cooldown Exhausted (All Models on Cooldown)
+
+**Problem:** `All agy models are currently capacity-limited or unavailable`
+
+**Solution:** Delete the cooldown state file to reset:
+```powershell
+# Windows
+Remove-Item .claude\metrics\agy_model_state.json -ErrorAction SilentlyContinue
+
+# Unix
+rm -f .claude/metrics/agy_model_state.json
 ```
 
 ### Windows Uses Python 2
@@ -440,30 +460,28 @@ python3 setup.py --target /path/to/your/project
 
 ### Dave — Code Review Agent
 
-`agents/code-review-agent-dave/` provides a Gemini-powered code reviewer that produces structured audit reports.
+`agents/code-review-agent-dave/` provides an agy-powered code reviewer that produces structured audit reports.
 
-| Script | Mode | Description |
-|--------|------|-------------|
-| `start-audit.ps1` | Interactive (`gemini chat --yolo`) | Live review session; good for iterating on findings |
-| `generate-audit.ps1` | Headless (`gemini --yolo`) | Exhaustive automated audit; flags everything pedantically |
+| Script | Description |
+|--------|-------------|
+| `start-audit.ps1` | Code review session via agy (Gemini 3.1 Pro) |
+| `generate-audit.ps1` | Exhaustive automated audit; flags everything pedantically |
 
-Both scripts auto-commit uncommitted changes before auditing, then save the report to `audit/<model>_audit_<datetime>_<hash>.md`. The `audit/` folder is gitignored.
+Both scripts auto-commit uncommitted changes before auditing, then save the report to `audit/agy-gemini-3.1-pro_audit_<datetime>_<hash>.md`. The `audit/` folder is gitignored.
 
 Run from the project root:
 ```powershell
 .\agents\code-review-agent-dave\generate-audit.ps1   # headless
-.\agents\code-review-agent-dave\start-audit.ps1      # interactive
+.\agents\code-review-agent-dave\start-audit.ps1      # same, with different report label
 ```
-
-The installer copies `agents/` to any target project (`python setup.py --target <dir>`).
 
 ## Response Files
 
 After install, a `temp/` directory is created at the project root.
-`gemini_delegate.py` automatically saves every successful Gemini response to
-`temp/gemini-{timestamp}.md` (model name in the header comment).
-`temp/gemini-*.md` is gitignored; `temp/.gitkeep` is tracked so the directory
-survives clones.  Pass `--no-save` to skip saving for a single call.
+`gemini_delegate.py` automatically saves every successful agy response to
+`temp/agy-{timestamp}.md` (model name in the header comment).
+`temp/agy-*.md` is gitignored; `temp/.gitkeep` is tracked so the directory
+survives clones. Pass `--no-save` to skip saving for a single call.
 
 ## Project Structure
 ```
@@ -473,9 +491,11 @@ claude-gemini-delegation/
 |   |-- post_delegate.py
 |   |-- analyze_metrics.py
 |   |-- gemini_delegate.py
-|   |-- gemini_fast_settings.json  # Delegation-only Gemini settings (no MCP, no telemetry)
 |   |-- delegation_guard.py
 |   |-- delegation_guard.ps1
+|   |-- delegate              # bash shim for pre_delegate.py
+|   |-- delegate.ps1          # PowerShell shim
+|   |-- delegate.bat          # CMD shim
 |   `-- delegate_and_log.ps1
 |-- temp/                      # Auto-created; stores delegation response .md files
 |-- tests/
@@ -490,4 +510,4 @@ claude-gemini-delegation/
 `-- README.md
 ```
 
-**Last Updated**: May 29, 2026
+**Last Updated**: June 19, 2026

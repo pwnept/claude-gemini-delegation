@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 
 # generate-audit.ps1
-# Runs Dave in headless (non-interactive) mode — exhaustive, pedantic audit.
+# Runs Dave in headless mode — exhaustive, pedantic audit.
 # Flags everything to minimise iteration rounds.
 
 $AgentDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -21,10 +21,10 @@ if ($GitStatus) {
 
 $CommitHash = git rev-parse --short HEAD
 $DateTime   = Get-Date -Format "yyyyMMdd_HHmmss"
-$ReportPath = "audit\gemini-3.1-pro-preview_audit_${DateTime}_${CommitHash}_headless.md"
+$ReportPath = "audit\agy-gemini-3.1-pro_audit_${DateTime}_${CommitHash}_headless.md"
 
 Write-Host "Starting Dave Headless Audit..." -ForegroundColor Cyan
-Write-Host "Model: gemini-3.1-pro-preview"   -ForegroundColor DarkGray
+Write-Host "Model: Gemini 3.1 Pro (via agy)"  -ForegroundColor DarkGray
 Write-Host "Report: $ReportPath"              -ForegroundColor DarkGray
 
 $Prompt = @"
@@ -40,4 +40,4 @@ MANDATORY HEADLESS RULES:
 6. EXIT: Once the report is saved, your task is complete.
 "@
 
-gemini --yolo --model gemini-3.1-pro-preview --prompt $Prompt
+$Prompt | python3 "$ProjectRoot\hooks\gemini_delegate.py" --profile research

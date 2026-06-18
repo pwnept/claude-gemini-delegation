@@ -3,6 +3,7 @@
 metrics/
 
 # Delegation response files
+temp/agy-*.md
 temp/gemini-*.md
 
 # Dave code audit reports

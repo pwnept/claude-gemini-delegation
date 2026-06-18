@@ -21,7 +21,7 @@ Codex workflows can use the mirrored `.Codex/hooks` path.
 **Windows (PowerShell):**
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
-$prompt | python .claude/hooks/gemini_delegate.py
+$prompt | python3 .claude/hooks/gemini_delegate.py
 
 # Full pipeline with validation/metrics:
 .claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
@@ -50,19 +50,19 @@ proactive delegation on broad analysis and research tasks.
 ### Security Audit
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "scan auth.py for vulnerabilities" "Pre-deploy security check"
-$prompt | python .claude/hooks/gemini_delegate.py
+$prompt | python3 .claude/hooks/gemini_delegate.py
 ```
 
 ### Git Operations
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "git log --oneline --since=1.week" "Finding bug introduction"
-$prompt | python .claude/hooks/gemini_delegate.py
+$prompt | python3 .claude/hooks/gemini_delegate.py
 ```
 
 ### Code Analysis
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "analyze @src/ for performance issues" "Optimization task"
-$prompt | python .claude/hooks/gemini_delegate.py
+$prompt | python3 .claude/hooks/gemini_delegate.py
 ```
 
 ## Subagent Policy

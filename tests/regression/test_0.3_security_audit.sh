@@ -52,9 +52,9 @@ else
   PASS=false
 fi
 
-# Assert 2: Claude should delegate to Gemini for security audit
-echo -n "Assert 2: Claude delegated to Gemini... "
-if echo "$OUTPUT" | grep -qiE "(gemini.*-m|gemini.*pro|bash.*gemini|delegating.*gemini)"; then
+# Assert 2: Claude should delegate to agy for security audit
+echo -n "Assert 2: Claude delegated to agy... "
+if echo "$OUTPUT" | grep -qiE "(gemini|agy|gemini_delegate)"; then
   echo -e "${GREEN}PASS${NC}"
   DELEGATED=true
 else
