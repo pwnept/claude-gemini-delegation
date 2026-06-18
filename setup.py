@@ -605,12 +605,16 @@ def create_claude_settings(base_dir: Path):
     for matcher in matchers_needed:
         pre_tool_use.append({"matcher": matcher, "hooks": [hook_def]})
 
+    new_content = json.dumps(settings, indent=2) + "\n"
+    if settings_path.exists() and settings_path.read_text(encoding="utf-8") == new_content:
+        return
+
     if settings_path.exists():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = settings_path.with_name(f"settings.json.bak.{timestamp}")
         shutil.copy2(settings_path, backup_path)
 
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    settings_path.write_text(new_content, encoding="utf-8")
     print_success(f"Updated {hook_root}/settings.json delegation guard (Bash + PowerShell)")
 
 

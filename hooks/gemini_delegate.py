@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Run Gemini CLI with model-pool fallback.
+Run agy (Antigravity) CLI with model-pool fallback.
 
 Usage:
     python gemini_delegate.py [prompt]
     echo "prompt" | python gemini_delegate.py
 
 The wrapper avoids separate quota probes. Instead, it treats capacity/rate-limit
-failures from Gemini CLI as live signals, cools down that model, and retries the
-same prompt on the next configured model pool.
+failures as live signals, cools down that model, and retries the same prompt on
+the next configured model pool.
 """
 
 import argparse
@@ -16,9 +16,9 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -28,19 +28,15 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 DEFAULT_MODELS = [
-    "gemini-3-flash-preview",
-    "gemini-2.5-flash",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
+    "Gemini 3.5 Flash (Medium)",
+    "Gemini 3.5 Flash (Low)",
+    "Gemini 3.5 Flash (High)",
 ]
 
 RESEARCH_MODELS = [
-    "gemini-3.1-pro-preview",
-    "gemini-2.5-pro",
-    "gemini-3-flash-preview",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "Gemini 3.1 Pro (High)",
+    "Gemini 3.1 Pro (Low)",
+    "Gemini 3.5 Flash (Medium)",
 ]
 
 CAPACITY_PATTERNS = (
@@ -135,115 +131,111 @@ def mark_cooldown(model: str, state: dict, error_text: str, now: float, fallback
     return cooldown_seconds
 
 
-def resolve_gemini_command() -> str:
+def resolve_agy_command() -> str:
     if os.name == "nt":
-        return shutil.which("gemini.cmd") or shutil.which("gemini") or "gemini.cmd"
-    return shutil.which("gemini") or "gemini"
+        return shutil.which("agy.exe") or shutil.which("agy") or "agy.exe"
+    return shutil.which("agy") or "agy"
 
 
-import tempfile
+_ANSI_RE = re.compile(
+    # OSC and DCS must come before the 2-char catch-all or ] gets consumed early
+    r"\x1b(?:"
+    r"\][^\x07\x1b]*(?:\x07|\x1b\\)"   # OSC: ESC ] ... BEL or ST
+    r"|\[[0-?]*[ -/]*[@-~]"             # CSI: ESC [ params final
+    r"|[@-Z\\-_]"                        # 2-char Fe/Fp/Fs sequences
+    r")"
+    r"|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"  # bare control chars
+)
 
-def run_gemini(
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def run_agy(
     command: str,
     model: str,
     prompt: str,
     timeout: int,
     idle_timeout: int = 30,
 ) -> subprocess.CompletedProcess:
-    """Run Gemini CLI with activity-aware streaming timeout.
+    """Run agy via ConPTY (pywinpty) so CONOUT$ output is captured.
 
-    Kills the process if no output appears on stdout or stderr for
-    idle_timeout seconds. As long as Gemini is streaming (progress lines,
-    search results being compiled, etc.) the idle timer resets, so research
-    tasks that take several minutes are not cut short. The hard cap is
-    timeout seconds; 0 means no hard cap.
+    agy always writes to the Windows console regardless of stdout redirect.
+    A ConPTY (pseudoterminal) intercepts CONOUT$ writes and exposes them as
+    readable bytes, exactly like a real terminal. ANSI escape sequences are
+    stripped from the captured text before returning.
     """
-    env = os.environ.copy()
-    env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
-    env["NO_COLOR"] = "1"
-
-    # Point delegation subprocess at the fast settings file so startup-blocking
-    # work is skipped (no editor scan, no GPU telemetry, no MCP init for servers
-    # that are irrelevant to code/research delegation tasks).
-    fast_settings = Path(__file__).resolve().parent / "gemini_fast_settings.json"
-    if fast_settings.exists():
-        env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(fast_settings)
-
-    # Use a temporary file for the prompt to avoid command line length limits
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", encoding="utf-8", delete=False) as tf:
-        tf.write(prompt)
-        temp_prompt_file = tf.name
-
     try:
-        proc = subprocess.Popen(
-            [command, "--skip-trust", "--model", model, "-p", f"@{temp_prompt_file}"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
+        import winpty
+    except ImportError:
+        raise RuntimeError(
+            "pywinpty is required to capture agy output: pip3 install pywinpty"
         )
 
-        stdout_chunks: list = []
-        stderr_chunks: list = []
-        last_activity = [time.monotonic()]
+    # Run from a neutral temp dir — agy detects git workspaces and enters
+    # interactive mode when run from a project directory, ignoring -p.
+    import tempfile
+    neutral_cwd = tempfile.gettempdir()
+    # argv[0] is NOT prepended: the original working form used bare flags.
+    cmdline = subprocess.list2cmdline(["--model", model, "-p", prompt])
+    pty = winpty.PTY(220, 50)
+    pty.spawn(command, cmdline=cmdline, cwd=neutral_cwd)
 
-        def _drain(stream, collector):
-            for chunk in iter(lambda: stream.read(256), ""):
-                collector.append(chunk)
-                last_activity[0] = time.monotonic()
-            stream.close()
+    buf = ""
+    last_activity = time.monotonic()
+    start = time.monotonic()
+    kill_reason = None
+    trust_confirmed = False
 
-        t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
-        t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
-        t_out.start()
-        t_err.start()
-
-        start = time.monotonic()
-        kill_reason = None
-
-        while proc.poll() is None:
-            now = time.monotonic()
-            if idle_timeout > 0 and (now - last_activity[0]) >= idle_timeout:
+    while True:
+        now = time.monotonic()
+        chunk = pty.read(blocking=False)
+        if chunk:
+            buf += chunk
+            last_activity = now
+            # agy prompts "Do you trust…" on first run in a directory;
+            # the cursor starts on "Yes, I trust this folder" so Enter confirms.
+            if not trust_confirmed and "Do you trust the contents" in buf:
+                time.sleep(0.3)
+                pty.write("\r")
+                trust_confirmed = True
+        elif not pty.isalive():
+            # drain any remaining PTY buffer
+            while True:
+                tail = pty.read(blocking=False)
+                if not tail:
+                    break
+                buf += tail
+            break
+        else:
+            if idle_timeout > 0 and (now - last_activity) >= idle_timeout:
                 kill_reason = "idle"
-                proc.kill()
+                os.kill(pty.pid, signal.SIGTERM)
                 break
             if timeout > 0 and (now - start) >= timeout:
                 kill_reason = "max"
-                proc.kill()
+                os.kill(pty.pid, signal.SIGTERM)
                 break
-            time.sleep(0.5)
+            time.sleep(0.2)
 
-        t_out.join(timeout=5)
-        t_err.join(timeout=5)
+    stdout = _strip_ansi(buf)
 
-        stdout = "".join(stdout_chunks)
-        stderr = "".join(stderr_chunks)
-
-        if kill_reason:
-            elapsed = time.monotonic() - start
-            secs = idle_timeout if kill_reason == "idle" else timeout
-            raise subprocess.TimeoutExpired(
-                cmd=[command, "--model", model],
-                timeout=secs,
-                output=stdout,
-                stderr=stderr,
-            )
-
-        return subprocess.CompletedProcess(
-            args=[command, "--skip-trust", "--model", model, "-p", f"@{temp_prompt_file}"],
-            returncode=proc.returncode,
-            stdout=stdout,
-            stderr=stderr,
+    if kill_reason:
+        secs = idle_timeout if kill_reason == "idle" else timeout
+        raise subprocess.TimeoutExpired(
+            cmd=[command, "--model", model],
+            timeout=secs,
+            output=stdout,
+            stderr="",
         )
-    finally:
-        if os.path.exists(temp_prompt_file):
-            try:
-                os.remove(temp_prompt_file)
-            except OSError:
-                pass
+
+    return subprocess.CompletedProcess(
+        args=[command, "--model", model, "-p", "..."],
+        returncode=0,
+        stdout=stdout,
+        stderr="",
+    )
 
 
 def _try_save_response(output: str, model: str) -> None:
@@ -252,7 +244,7 @@ def _try_save_response(output: str, model: str) -> None:
     if not temp_dir.is_dir():
         return
     ts = time.strftime("%Y%m%d-%H%M%S")
-    out_path = temp_dir / f"gemini-{ts}.md"
+    out_path = temp_dir / f"agy-{ts}.md"
     try:
         with out_path.open("w", encoding="utf-8") as f:
             f.write(f"<!-- model: {model} -->\n")
@@ -263,7 +255,7 @@ def _try_save_response(output: str, model: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Gemini CLI with capacity-aware model fallback.")
+    parser = argparse.ArgumentParser(description="Run agy CLI with capacity-aware model fallback.")
     parser.add_argument("prompt", nargs="?", help="Prompt to send. If omitted, stdin is used.")
     parser.add_argument(
         "--models",
@@ -279,7 +271,7 @@ def parse_args() -> argparse.Namespace:
         "--cooldown-seconds",
         type=int,
         default=300,
-        help="Cooldown to apply when Gemini reports capacity without a reset duration.",
+        help="Cooldown to apply when agy reports capacity without a reset duration.",
     )
     parser.add_argument(
         "--idle-timeout-seconds",
@@ -295,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--state-file",
-        help="Override state file path. Defaults to .claude/metrics/gemini_model_state.json.",
+        help="Override state file path. Defaults to .claude/metrics/agy_model_state.json.",
     )
     parser.add_argument(
         "--no-state",
@@ -305,7 +297,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--show-model",
         action="store_true",
-        help="Print the selected model to stderr on success.",
+        help="Print the selected agy model to stderr on success.",
     )
     parser.add_argument(
         "--no-save",
@@ -338,10 +330,10 @@ def main() -> int:
         return 2
 
     claude_dir = find_agent_dir(Path.cwd())
-    state_path = Path(args.state_file) if args.state_file else claude_dir / "metrics" / "gemini_model_state.json"
+    state_path = Path(args.state_file) if args.state_file else claude_dir / "metrics" / "agy_model_state.json"
     state = {"cooldowns": {}} if args.no_state else load_state(state_path)
     now = time.time()
-    command = resolve_gemini_command()
+    command = resolve_agy_command()
     skipped = []
     last_result = None
     last_model = None
@@ -354,9 +346,9 @@ def main() -> int:
             skipped.append(model)
             continue
 
-        print("Trying Gemini model: {0}".format(model), file=sys.stderr)
+        print("Trying agy model: {0}".format(model), file=sys.stderr)
         try:
-            result = run_gemini(
+            result = run_agy(
                 command, model, prompt,
                 timeout=args.timeout_seconds,
                 idle_timeout=args.idle_timeout_seconds,
@@ -389,7 +381,7 @@ def main() -> int:
 
         if result.returncode == 0:
             if args.show_model:
-                print("Gemini model used: {0}".format(model), file=sys.stderr)
+                print("agy model used: {0}".format(model), file=sys.stderr)
             if output:
                 if not args.no_save:
                     _try_save_response(output, model)
@@ -418,7 +410,7 @@ def main() -> int:
     if not args.no_state:
         save_state(state_path, state)
 
-    print("All Gemini models are currently capacity-limited or unavailable.", file=sys.stderr)
+    print("All agy models are currently capacity-limited or unavailable.", file=sys.stderr)
     if skipped:
         print("Skipped due to cooldown: {0}".format(", ".join(skipped)), file=sys.stderr)
     if last_result is not None:

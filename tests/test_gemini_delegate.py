@@ -34,7 +34,7 @@ class TestGeminiDelegate(unittest.TestCase):
     def test_falls_back_after_capacity_error(self):
         calls = []
 
-        def fake_run(command, model, prompt, timeout):
+        def fake_run(command, model, prompt, timeout, **kwargs):
             calls.append(model)
             if model == "flash":
                 return FakeResult(1, stderr="No capacity available for model flash on the server")
@@ -53,7 +53,7 @@ class TestGeminiDelegate(unittest.TestCase):
     def test_research_profile_uses_pro_first(self):
         calls = []
 
-        def fake_run(command, model, prompt, timeout):
+        def fake_run(command, model, prompt, timeout, **kwargs):
             calls.append(model)
             return FakeResult(0, stdout="ok\n")
 
@@ -64,7 +64,7 @@ class TestGeminiDelegate(unittest.TestCase):
                         code = gemini_delegate.main()
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls, ["gemini-2.5-pro"])
+        self.assertEqual(calls, ["gemini-3.1-pro-preview"])
 
 
 if __name__ == "__main__":

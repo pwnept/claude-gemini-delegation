@@ -2,46 +2,40 @@
 
 ## Enabled Delegation CLIs
 
-- **Gemini CLI**: Google's Gemini models via CLI
+- **agy (Antigravity)**: Google's Gemini models via agy CLI
 
 ## Delegation Presets
 
-- **security_audit**: Routes to `gemini`
+- **security_audit**: Routes to `agy`
   Pattern: `(security|vulnerability|audit|xss|sql injection|csrf)`
-- **web_search**: Routes to `gemini`
+- **web_search**: Routes to `agy`
   Pattern: `(search|documentation|lookup|find.*docs)`
-- **code_analysis**: Routes to `gemini`
+- **code_analysis**: Routes to `agy`
   Pattern: `(analyze|review|inspect).*code`
 
 ## Quick Delegation
 
 Use the wrapper scripts for easy delegation:
 
-**Unix/Mac:**
-```bash
-PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-gemini --model gemini-2.5-flash -p "$PROMPT"
-```
-
 **Windows (PowerShell):**
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis"
-gemini.cmd --model gemini-2.5-flash -p $prompt
+$prompt | python .claude/hooks/gemini_delegate.py
 ```
 
 **Windows (CMD):**
 ```cmd
 FOR /F "delims=" %i IN ('.claude\hooks\delegate.bat "npm ls" "Build analysis"') DO SET PROMPT=%i
-gemini.cmd --model gemini-2.5-flash -p "%PROMPT%"
+echo %PROMPT% | python .claude\hooks\gemini_delegate.py
 ```
 
 ## Subagent Policy
 
 Do **not** use Claude subagents for delegation work. Subagents spend Claude tokens and defeat this configuration's token-saving purpose.
 
-When a task matches any delegation preset, banned operation, or large-output condition, use the local hooks and Gemini CLI instead of spawning a Claude subagent. Only use Claude subagents when the user explicitly asks for Claude subagents by name.
+When a task matches any delegation preset, banned operation, or large-output condition, use the local hooks and agy instead of spawning a Claude subagent. Only use Claude subagents when the user explicitly asks for Claude subagents by name.
 
-## Always Delegate To Gemini
+## Always Delegate To agy
 
 - Commands expected to produce more than 500 lines of output
 - `npm ls`, `pip list`, `pip freeze`, and verbose dependency listings
@@ -49,7 +43,7 @@ When a task matches any delegation preset, banned operation, or large-output con
 - Recursive searches such as `find`, `grep -r`, or repository-wide scans
 - Reading or analyzing 3 or more new files
 - Security audits, vulnerability scans, XSS/SQL injection/CSRF checks
-- Documentation lookup or web search. Use `gemini_delegate.py --profile research` so Gemini Pro is tried before Flash.
+- Documentation lookup or web search. Use `gemini_delegate.py --profile research` so research profile is tried first.
 - Broad codebase analysis, performance review, or inspection tasks
 
 ## Delegation Workflow
@@ -57,30 +51,27 @@ When a task matches any delegation preset, banned operation, or large-output con
 1. **Identify task type** - Security? Git ops? Analysis?
 2. **Check presets** - Is there a matching preset?
 3. **Use delegation hook** - Let the hook format the prompt
-4. **Execute with Gemini CLI** - Use `gemini_delegate.py`, not Claude subagents
+4. **Execute with agy** - Use `gemini_delegate.py`, not Claude subagents
 5. **Validate response** - Check quality with the post-delegation hook
 
 ## Routing Examples
 
 ### Security Audit
-```bash
-# Auto-routes to Gemini (if enabled)
-PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
-gemini --model gemini-2.5-flash -p "$PROMPT"
+```powershell
+$prompt = & .claude/hooks/delegate.ps1 "scan auth.py for vulnerabilities" "Pre-deploy security check"
+$prompt | python .claude/hooks/gemini_delegate.py
 ```
 
-### Git Operations  
-```bash
-# Auto-routes to Aider (if enabled)
-PROMPT=$(./.claude/hooks/delegate "git log --oneline --since=1.week" "Finding bug introduction")
-aider -p "$PROMPT"
+### Git Operations
+```powershell
+$prompt = & .claude/hooks/delegate.ps1 "git log --oneline --since=1.week" "Finding bug introduction"
+$prompt | python .claude/hooks/gemini_delegate.py
 ```
 
 ### Code Analysis
-```bash
-# Routes based on configured preference
-PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
-gemini --model gemini-2.5-flash -p "$PROMPT"
+```powershell
+$prompt = & .claude/hooks/delegate.ps1 "analyze @src/ for performance issues" "Optimization task"
+$prompt | python .claude/hooks/gemini_delegate.py
 ```
 
 ### Research / Documentation / Web Search

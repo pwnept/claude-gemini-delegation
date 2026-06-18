@@ -224,8 +224,9 @@ class TestClaudeSettings(unittest.TestCase):
 
             settings = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
             hooks = self.guard_hooks(settings)
-            self.assertEqual(len(hooks), 1)
-            self.assertEqual(hooks[0][0]["matcher"], "Bash")
+            self.assertEqual(len(hooks), 2)
+            matchers = {h[0]["matcher"] for h in hooks}
+            self.assertEqual(matchers, {"Bash", "PowerShell"})
             self.assertIn(self.expected_guard_fragment(), hooks[0][1]["command"])
             self.assertEqual(len(list(claude_dir.glob("settings.json.bak.*"))), 0)
 
@@ -260,7 +261,9 @@ class TestClaudeSettings(unittest.TestCase):
 
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             hooks = self.guard_hooks(settings)
-            self.assertEqual(len(hooks), 1)
+            self.assertEqual(len(hooks), 2)
+            matchers = {h[0]["matcher"] for h in hooks}
+            self.assertEqual(matchers, {"Bash", "PowerShell"})
             self.assertIn(self.expected_guard_fragment(), hooks[0][1]["command"])
             self.assertEqual(len(list(claude_dir.glob("settings.json.bak.*"))), 1)
 
