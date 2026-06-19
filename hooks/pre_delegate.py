@@ -5,10 +5,10 @@ Automatically formats and optimizes delegation prompts
 Zero token cost - runs locally before Claude sees anything
 
 Usage:
-    python pre_delegate.py <task> [context] [max_lines]
-    
+    python3 pre_delegate.py <task> [context] [max_lines]
+
 Example:
-    python pre_delegate.py "npm ls" "Debugging slow build" 8
+    python3 pre_delegate.py "npm ls" "Debugging slow build" 8
 """ 
 
 import sys

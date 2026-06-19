@@ -11,10 +11,15 @@ This repository contains the hook templates themselves. Before installing into
 the checkout, use the source scripts directly:
 
 ```powershell
-$prompt = python hooks/pre_delegate.py "npm ls" "Build analysis" 5
-$prompt | python hooks/gemini_delegate.py
-
+# Full pipeline (recommended)
 & hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+
+# Two-step: format then run
+$prompt = & hooks/delegate.ps1 "npm ls" "Build analysis" 5
+$prompt | python3 hooks/gemini_delegate.py
+
+# Research profile for analysis or docs
+& hooks/delegate_and_log.ps1 "audit @src/ for SQL injection" "Security" 10 -Profile research
 ```
 
 Installed target projects use `.claude/hooks` for Claude Code and
