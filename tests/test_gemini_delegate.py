@@ -20,7 +20,7 @@ class FakeResult:
         self.stderr = stderr
 
 
-class TestGeminiDelegate(unittest.TestCase):
+class TestAgyDelegate(unittest.TestCase):
     def test_capacity_detection(self):
         self.assertTrue(gemini_delegate.capacity_limited("status 429 Too Many Requests"))
         self.assertTrue(gemini_delegate.capacity_limited("No capacity available for model"))
@@ -64,7 +64,7 @@ class TestGeminiDelegate(unittest.TestCase):
                         code = gemini_delegate.main()
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls, ["Gemini 3.1 Pro (Low)"])
+        self.assertEqual(calls, [gemini_delegate.RESEARCH_MODELS[0]])
 
 
 if __name__ == "__main__":

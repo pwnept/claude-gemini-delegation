@@ -16,11 +16,20 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# Derive hook prefix from script location so guidance is correct whether
-# the script lives in .claude/hooks/ or .Codex/hooks/.
-_HOOK_PREFIX = (
-    os.environ.get("DELEGATION_HOOK_PREFIX")
-    or Path(__file__).resolve().parent.parent.name + "/hooks"
+# Derive hook paths from the script location. In this source repository the
+# scripts live directly under hooks/; target installs use environment shims.
+_script_hooks_dir = Path(__file__).resolve().parent
+_script_parent_name = _script_hooks_dir.parent.name
+_default_prefix = (
+    "hooks"
+    if _script_parent_name not in (".claude", ".codex", ".Codex", ".gemini-delegation")
+    else _script_parent_name + "/hooks"
+)
+_HOOK_PREFIX = os.environ.get("DELEGATION_HOOK_PREFIX") or _default_prefix
+_RUNNER_PATH = (
+    _HOOK_PREFIX + "/gemini_delegate.py"
+    if _HOOK_PREFIX in ("hooks", ".gemini-delegation/hooks")
+    else ".gemini-delegation/hooks/gemini_delegate.py"
 )
 
 PATTERNS = [
@@ -33,13 +42,13 @@ PATTERNS = [
     (re.compile(r"\bpip\s+install\b.*--dry"), "pip dry-run"),
 ]
 
-GUIDANCE = f"""This command matches a delegation pattern. Use Gemini instead.
+GUIDANCE = f"""This command matches a delegation pattern. Use agy instead.
 
 IMPORTANT: Use the PowerShell tool — NOT the Bash tool. Bash routes to Git Bash on Windows and cannot run .ps1 scripts.
 
 PowerShell tool:
   $prompt = & {_HOOK_PREFIX}/delegate.ps1 "<task>" "<context>"
-  $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
+  $prompt | py -3 {_RUNNER_PATH}
 
 Or with validation/metrics (PowerShell tool):
   & {_HOOK_PREFIX}/delegate_and_log.ps1 "<task>" "<context>" 10

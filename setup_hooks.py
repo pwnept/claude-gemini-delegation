@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Cross-platform setup script for Claude-Gemini delegation hooks
+Cross-platform setup script for Claude Code/Codex delegation to agy
 
 This script:
 1. Creates .claude/hooks directory structure
@@ -31,7 +31,7 @@ MARKER_END = "> [claude-gemini-delegation:end]"
 
 SCRIPT_DIR = Path(__file__).parent
 HOOKS_SOURCE = SCRIPT_DIR / "hooks"
-DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
+CODEX_DIR_NAME = ".codex"
 ROOT_CLAUDE_IMPORTS = ("@AGENTS.md",)
 GEMINI_DELEGATION_DIR = ".gemini-delegation"
 
@@ -57,6 +57,24 @@ The root `CLAUDE.md` also loads `.claude/CLAUDE.md`; follow that generated
 configuration for delegation presets, wrapper usage, and Gemini fallback
 behavior.
 """
+
+
+def get_codex_dir(project_dir):
+    """Return .codex, migrating the legacy .Codex directory casing."""
+    canonical = project_dir / CODEX_DIR_NAME
+    exact_children = {child.name: child for child in project_dir.iterdir()} if project_dir.exists() else {}
+    legacy = exact_children.get(".Codex")
+    exact_canonical = exact_children.get(CODEX_DIR_NAME)
+    if legacy is not None and exact_canonical is None:
+        if platform.system() == "Windows":
+            temporary = project_dir / ".codex-case-migration"
+            legacy.rename(temporary)
+            temporary.rename(canonical)
+        else:
+            legacy.rename(canonical)
+        print("[OK] Migrated legacy .Codex directory to .codex")
+    return canonical
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -320,10 +338,10 @@ def create_claude_settings(claude_dir):
 
     Registers the guard for both Bash and PowerShell matchers so it fires
     regardless of which shell tool Claude uses. Derives the hook path from
-    the directory name (.claude or .Codex) so the command is always correct.
+    the Claude project directory name so the command is always correct.
     """
     settings_path = claude_dir / "settings.json"
-    hook_root = claude_dir.name  # ".claude" or ".Codex"
+    hook_root = claude_dir.name
     command = (
         f"powershell -NoProfile -ExecutionPolicy Bypass -File {hook_root}/hooks/delegation_guard.ps1"
         if platform.system() == "Windows"
@@ -412,7 +430,7 @@ def copy_hook_files(hooks_dir):
 
 
 def ensure_dot_claude_bridge(claude_dir: Path) -> str:
-    """Replace .claude/CLAUDE.md with a bridge to ../AGENTS.md.
+    """Migrate .claude/CLAUDE.md content and remove the redundant bridge.
 
     Returns any user content that was outside the managed delegation section
     so it can be migrated into AGENTS.md.
@@ -423,7 +441,8 @@ def ensure_dot_claude_bridge(claude_dir: Path) -> str:
     if claude_md.exists():
         existing = claude_md.read_text(encoding="utf-8")
         if existing == bridge:
-            print("[OK] .claude/CLAUDE.md is already a bridge to AGENTS.md")
+            claude_md.unlink()
+            print("[OK] Removed redundant .claude/CLAUDE.md bridge")
             return ""
 
         content = existing
@@ -445,8 +464,9 @@ def ensure_dot_claude_bridge(claude_dir: Path) -> str:
     else:
         user_content = ""
 
-    claude_md.write_text(bridge, encoding="utf-8")
-    print("[OK] .claude/CLAUDE.md is now a bridge to AGENTS.md")
+    if claude_md.exists():
+        claude_md.unlink()
+        print("[OK] Migrated and removed .claude/CLAUDE.md")
     return user_content + "\n" if user_content else ""
 
 
@@ -494,9 +514,9 @@ def ensure_root_claude_bridge(project_dir):
 
 def build_agents_section():
     """Return the managed AGENTS.md delegation section."""
-    body = """## Gemini Delegation
+    body = """## Antigravity Delegation
 
-Gemini delegation is installed locally in `.claude/hooks` and `.Codex/hooks`.
+agy delegation is installed locally in `.claude/hooks` and `.codex/hooks`.
 
 ### Always Delegate
 
@@ -507,7 +527,7 @@ Use delegation for token-heavy or broad read-only work:
 - Recursive searches such as `find`, `grep -r`, or repository-wide scans
 - Reading or analyzing 3 or more new files
 - Security audits, vulnerability scans, XSS/SQL injection/CSRF checks
-- Documentation lookup or web search. Use `--profile research` so Gemini Pro is tried before Flash.
+- Documentation lookup or web search. Use `--profile research` so a Pro model is tried before Flash.
 - Broad codebase analysis, performance review, or inspection tasks
 
 ### Subagent Policy
@@ -516,12 +536,15 @@ Do **not** use Claude subagents for delegation work. Subagents spend Claude
 tokens and defeat this configuration's token-saving purpose.
 Only use Claude subagents when the user explicitly asks for Claude subagents by name.
 
+When the current agent is Antigravity or agy itself, do the work directly.
+Do not recursively invoke agy from inside an Antigravity agent session.
+
 ### Delegation Workflow
 
 1. **Identify task type** - Security? Git ops? Analysis?
 2. **Check presets** - Is there a matching preset?
 3. **Use delegation hook** - Let the hook format the prompt
-4. **Execute with Gemini CLI** - Use `gemini_delegate.py`, not Claude subagents
+4. **Execute with agy** - Use `gemini_delegate.py`, not Claude subagents
 5. **Validate response** - Check quality with the post-delegation hook
 
 ### Quick Delegation
@@ -535,9 +558,9 @@ run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(..
 & .claude/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 
 # Codex hook
-& .Codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+& .codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 
-# Research profile (Gemini Pro before Flash)
+# Research profile (Pro before Flash)
 & .claude/hooks/delegate_and_log.ps1 "find docs for X" "Research task" 10 -Profile research
 ```
 
@@ -656,7 +679,7 @@ def create_readme(hooks_dir):
 
     content = """# Delegation Hooks
 
-Cross-platform Python hooks for Claude Code -> Gemini delegation.
+Cross-platform Python hooks for Claude Code/Codex -> agy delegation.
 
 ## Usage
 
@@ -733,6 +756,22 @@ def create_gitignore(claude_dir):
         print("[OK] Created .gitignore")
 
 
+def create_antigravity_rule(project_dir):
+    """Create the workspace rule used by Antigravity IDE."""
+    rules_dir = project_dir / ".agents" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    rule_path = rules_dir / "delegation.md"
+    rule_path.write_text(
+        "# Delegation workspace rule\n\n"
+        "- Read and follow the repository-root `AGENTS.md`.\n"
+        "- This session is already running in Antigravity, so perform work directly.\n"
+        "- Do not recursively invoke `agy` from Antigravity IDE or agy CLI.\n"
+        "- `.claude/hooks` and `.codex/hooks` are entry points for Claude Code and Codex.\n",
+        encoding="utf-8",
+    )
+    print("[OK] Created Antigravity workspace rule: " + str(rule_path))
+
+
 def print_next_steps(claude_dir, is_user_install):
     """Print next steps for the user."""
     print("\n" + "=" * 60)
@@ -780,7 +819,7 @@ def print_next_steps(claude_dir, is_user_install):
     print("\nDocumentation:")
     print("   " + str(claude_dir / "hooks" / "README.md"))
     if not is_user_install:
-        print("   " + str(claude_dir.parent / ".Codex" / "hooks" / "README.md"))
+        print("   " + str(claude_dir.parent / CODEX_DIR_NAME / "hooks" / "README.md"))
 
     print("\nTips:")
     print("   - Hooks work identically on Windows, Mac, and Linux")
@@ -791,7 +830,7 @@ def print_next_steps(claude_dir, is_user_install):
 
 def main():
     """Main setup process."""
-    print("Claude-Gemini Delegation Hooks Setup")
+    print("Claude/Codex -> Antigravity Delegation Hooks Setup")
     print("=" * 60)
 
     # Check Python version
@@ -813,21 +852,20 @@ def main():
     create_directory_structure(base_dir)
 
     # Install shared scripts to .gemini-delegation/ (single copy for both envs)
-    config = {"version": "1.0.0", "preferences": {"default_cli": "gemini"}}
+    config = {"version": "1.0.0", "preferences": {"default_cli": "agy"}}
     install_gemini_delegation_dir(base_dir.parent, config)
 
     # Install per-env shims only (thin forwarders to .gemini-delegation/hooks/)
     hooks_dir = base_dir / "hooks"
     create_env_shims(hooks_dir)
 
-    # Make .claude/CLAUDE.md a bridge; migrate its content to AGENTS.md
+    # Migrate any legacy .claude/CLAUDE.md content into AGENTS.md.
     dot_claude_migrated = ensure_dot_claude_bridge(base_dir)
     if not is_user_install:
         create_claude_settings(base_dir)
-        codex_dir = base_dir.parent / ".Codex"
+        codex_dir = get_codex_dir(base_dir.parent)
         create_directory_structure(codex_dir)
         create_env_shims(codex_dir / "hooks")
-        create_claude_settings(codex_dir)
         create_readme(codex_dir / "hooks")
         create_gitignore(codex_dir)
         root_claude_md = base_dir.parent / "CLAUDE.md"
@@ -839,6 +877,7 @@ def main():
         )
         ensure_agents_md(base_dir.parent, combined_migration)
         ensure_root_claude_bridge(base_dir.parent)
+        create_antigravity_rule(base_dir.parent)
     create_readme(hooks_dir)
     create_gitignore(base_dir)
 

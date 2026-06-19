@@ -1,4 +1,4 @@
-# Full delegation pipeline: pre_delegate -> gemini_delegate -> post_delegate
+# Full delegation pipeline: pre_delegate -> agy runner -> post_delegate
 # Usage: ./delegate_and_log.ps1 <task> [context] [max_lines] [-Profile research]
 param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Task,
@@ -12,7 +12,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:LastPythonExitCode = 0
 
 function Invoke-Python3 {
-    param([string[]]$PythonArgs)
+    param(
+        [string[]]$PythonArgs,
+        [AllowEmptyString()]
+        [string]$InputText,
+        [switch]$HasInput
+    )
 
     $candidates = @(
         @{ Command = "py"; Prefix = @("-3") },
@@ -30,7 +35,11 @@ function Invoke-Python3 {
             continue
         }
 
-        & $candidate.Command @($candidate.Prefix + $PythonArgs)
+        if ($HasInput) {
+            $InputText | & $candidate.Command @($candidate.Prefix + $PythonArgs)
+        } else {
+            & $candidate.Command @($candidate.Prefix + $PythonArgs)
+        }
         $script:LastPythonExitCode = $LASTEXITCODE
         return
     }
@@ -45,7 +54,7 @@ if ($MaxLines -gt 0) {
 }
 
 # Pass Task via stdin to avoid PowerShell arg splitting/length issues
-$prompt = $Task | Invoke-Python3 -PythonArgs $promptArgs
+$prompt = Invoke-Python3 -PythonArgs $promptArgs -InputText $Task -HasInput
 $preExitCode = $script:LastPythonExitCode
 if ($preExitCode -ne 0 -or -not $prompt) {
     Write-Error "pre_delegate.py failed or produced no output."
@@ -59,7 +68,7 @@ if ($Profile -ne "default") {
 }
 
 # Pass Prompt via stdin to avoid command line length limits (8KB)
-$response = $promptText | Invoke-Python3 -PythonArgs $delegateArgs
+$response = Invoke-Python3 -PythonArgs $delegateArgs -InputText $promptText -HasInput
 $delegateExitCode = $script:LastPythonExitCode
 $responseText = $response -join "`n"
 

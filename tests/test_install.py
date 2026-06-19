@@ -6,6 +6,8 @@ Run with: python -m unittest discover tests
 import importlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,6 +21,7 @@ from install import (
     build_root_claude_bridge,
     extract_migrated_claude_content,
     ensure_agents_md,
+    ensure_dot_claude_bridge,
     ensure_root_claude_bridge,
     interactive_selection,
 )
@@ -28,10 +31,10 @@ enhanced_setup = importlib.import_module("setup")
 
 def fake_discovered():
     return {
-        "gemini": {
-            "name": "Gemini CLI",
-            "command": "gemini",
-            "description": "Google's Gemini models via CLI",
+        "agy": {
+            "name": "agy (Antigravity CLI)",
+            "command": "agy",
+            "description": "Google Antigravity models via agy CLI",
             "installed": True,
         },
         "aider": {
@@ -50,27 +53,27 @@ def fake_discovered():
 
 
 class TestInstallerSelection(unittest.TestCase):
-    def test_defaults_to_gemini_only(self):
+    def test_defaults_to_agy_only(self):
         selected = interactive_selection(fake_discovered())
-        self.assertEqual(list(selected.keys()), ["gemini"])
+        self.assertEqual(list(selected.keys()), ["agy"])
 
     def test_enable_cli_adds_installed_extra(self):
         selected = interactive_selection(
             fake_discovered(),
-            enabled_cli_names=["gemini", "copilot"],
+            enabled_cli_names=["agy", "copilot"],
         )
-        self.assertEqual(list(selected.keys()), ["gemini", "copilot"])
+        self.assertEqual(list(selected.keys()), ["agy", "copilot"])
 
     def test_enable_all_selects_installed_supported_clis(self):
         selected = interactive_selection(fake_discovered(), enable_all=True)
-        self.assertEqual(list(selected.keys()), ["gemini", "copilot"])
+        self.assertEqual(list(selected.keys()), ["agy", "copilot"])
 
     def test_missing_requested_cli_is_skipped(self):
         selected = interactive_selection(
             fake_discovered(),
-            enabled_cli_names=["gemini", "aider"],
+            enabled_cli_names=["agy", "aider"],
         )
-        self.assertEqual(list(selected.keys()), ["gemini"])
+        self.assertEqual(list(selected.keys()), ["agy"])
 
 
 class TestRootClaudeBridge(unittest.TestCase):
@@ -120,6 +123,33 @@ class TestRootClaudeBridge(unittest.TestCase):
             self.assertEqual(len(list(project_dir.glob("CLAUDE.md.bak.*"))), 1)
 
 
+class TestDotClaudeMigration(unittest.TestCase):
+    def test_removes_redundant_dot_claude_bridge(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+            bridge = claude_dir / "CLAUDE.md"
+            bridge.write_text("@../AGENTS.md\n", encoding="utf-8")
+
+            migrated = ensure_dot_claude_bridge(claude_dir)
+
+            self.assertEqual(migrated, "")
+            self.assertFalse(bridge.exists())
+
+    def test_migrates_dot_claude_user_content(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+            claude_md = claude_dir / "CLAUDE.md"
+            claude_md.write_text("# Local Claude rule\nKeep this.\n", encoding="utf-8")
+
+            migrated = ensure_dot_claude_bridge(claude_dir)
+
+            self.assertEqual(migrated, "# Local Claude rule\nKeep this.\n")
+            self.assertFalse(claude_md.exists())
+            self.assertEqual(len(list(claude_dir.glob("CLAUDE.md.bak.*"))), 1)
+
+
 class TestAgentsMd(unittest.TestCase):
     def test_creates_agents_md(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -133,7 +163,7 @@ class TestAgentsMd(unittest.TestCase):
             self.assertIn(AGENTS_MARKER_BEGIN, content)
             self.assertIn(AGENTS_MARKER_END, content)
             self.assertIn(".claude/hooks", content)
-            self.assertIn(".Codex/hooks", content)
+            self.assertIn(".codex/hooks", content)
 
     def test_preserves_existing_agents_md(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -266,6 +296,103 @@ class TestClaudeSettings(unittest.TestCase):
             self.assertEqual(matchers, {"Bash", "PowerShell"})
             self.assertIn(self.expected_guard_fragment(), hooks[0][1]["command"])
             self.assertEqual(len(list(claude_dir.glob("settings.json.bak.*"))), 1)
+
+
+class TestCrossToolInstall(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "Windows PowerShell test")
+    def test_delegate_and_log_forwards_task_and_prompt_stdin(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks_dir = Path(tmpdir) / "hooks"
+            shutil.copytree(Path(__file__).parent.parent / "hooks", hooks_dir)
+            (hooks_dir / "gemini_delegate.py").write_text(
+                "import sys\nprint(sys.stdin.read())\n",
+                encoding="utf-8",
+            )
+            (hooks_dir / "post_delegate.py").write_text(
+                "import sys\nsys.exit(0)\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(hooks_dir / "delegate_and_log.ps1"),
+                    "task-marker",
+                    "context-marker",
+                    "5",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("task-marker", result.stdout)
+            self.assertIn("context-marker", result.stdout)
+
+    def test_migrates_legacy_codex_directory_casing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            (project_dir / ".Codex").mkdir()
+
+            codex_dir = enhanced_setup.get_codex_dir(project_dir)
+            child_names = {child.name for child in project_dir.iterdir()}
+
+            self.assertEqual(codex_dir.name, ".codex")
+            self.assertIn(".codex", child_names)
+            self.assertNotIn(".Codex", child_names)
+
+    def test_antigravity_rule_prevents_recursive_agy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rule_path = enhanced_setup.create_antigravity_rule(Path(tmpdir))
+            content = rule_path.read_text(encoding="utf-8")
+
+            self.assertIn("AGENTS.md", content)
+            self.assertIn("Do not recursively invoke `agy`", content)
+
+    def test_target_install_creates_all_tool_entry_points(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).parent.parent / "setup.py"),
+                    "--target",
+                    tmpdir,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env={**os.environ, "DELEGATION_SKIP_REGISTRY": "1"},
+                timeout=30,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            project_dir = Path(tmpdir)
+            self.assertTrue((project_dir / "AGENTS.md").is_file())
+            self.assertEqual(
+                (project_dir / "CLAUDE.md").read_text(encoding="utf-8"),
+                "@AGENTS.md\n",
+            )
+            self.assertTrue((project_dir / ".claude" / "settings.json").is_file())
+            self.assertTrue((project_dir / ".claude" / "hooks" / "delegate.ps1").is_file())
+            self.assertFalse((project_dir / ".claude" / "CLAUDE.md").exists())
+            self.assertTrue((project_dir / ".codex" / "hooks" / "delegate.ps1").is_file())
+            self.assertFalse((project_dir / ".codex" / "settings.json").exists())
+            self.assertTrue((project_dir / ".agents" / "rules" / "delegation.md").is_file())
+            installed_agent_dir = project_dir / "agents" / "code-review-agent-dave"
+            self.assertTrue((installed_agent_dir / "dave_audit.md").is_file())
+            audit_script = (installed_agent_dir / "generate-audit.ps1").read_text(encoding="utf-8")
+            self.assertIn(".claude\\hooks\\delegate_and_log.ps1", audit_script)
+            self.assertNotIn("git commit", audit_script)
 
 
 if __name__ == "__main__":

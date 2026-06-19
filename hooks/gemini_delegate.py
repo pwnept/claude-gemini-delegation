@@ -54,18 +54,18 @@ def find_agent_dir(start: Path) -> Path:
     hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
     if hook_prefix:
         prefix_path = Path(hook_prefix)
-        if prefix_path.parent.name in (".claude", ".Codex"):
+        if prefix_path.parent.name in (".claude", ".codex", ".Codex"):
             return prefix_path.parent
 
     # 2. Use script's own parent dir if it is a known agent dir
     script_parent = Path(__file__).resolve().parent.parent
-    if script_parent.name in (".claude", ".Codex", ".gemini-delegation"):
+    if script_parent.name in (".claude", ".codex", ".Codex", ".gemini-delegation"):
         return script_parent
 
     # 3. Search up the tree
     current = start.resolve()
     for directory in (current, *current.parents):
-        for name in (".gemini-delegation", ".claude", ".Codex"):
+        for name in (".gemini-delegation", ".claude", ".codex", ".Codex"):
             candidate = directory / name
             if candidate.exists():
                 return candidate
@@ -159,13 +159,28 @@ def run_agy(
     timeout: int,
     idle_timeout: int = 30,
 ) -> subprocess.CompletedProcess:
-    """Run agy via ConPTY (pywinpty) so CONOUT$ output is captured.
+    """Run agy and return captured output.
 
-    agy always writes to the Windows console regardless of stdout redirect.
-    A ConPTY (pseudoterminal) intercepts CONOUT$ writes and exposes them as
-    readable bytes, exactly like a real terminal. ANSI escape sequences are
-    stripped from the captured text before returning.
+    On Windows, agy writes to CONOUT$ instead of redirected stdout, so use a
+    ConPTY via pywinpty. On macOS and Linux, normal subprocess capture works.
     """
+    import tempfile
+    neutral_cwd = tempfile.gettempdir()
+    workspace_dir = str(Path.cwd().resolve())
+    agy_args = ["--add-dir", workspace_dir, "--model", model, "-p", prompt]
+
+    if os.name != "nt":
+        return subprocess.run(
+            [command, *agy_args],
+            cwd=neutral_cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout if timeout > 0 else None,
+            check=False,
+        )
+
     try:
         import winpty
     except ImportError:
@@ -175,10 +190,8 @@ def run_agy(
 
     # Run from a neutral temp dir — agy detects git workspaces and enters
     # interactive mode when run from a project directory, ignoring -p.
-    import tempfile
-    neutral_cwd = tempfile.gettempdir()
     # argv[0] is NOT prepended: the original working form used bare flags.
-    cmdline = subprocess.list2cmdline(["--model", model, "-p", prompt])
+    cmdline = subprocess.list2cmdline(agy_args)
     pty = winpty.PTY(220, 50)
     pty.spawn(command, cmdline=cmdline, cwd=neutral_cwd)
 
@@ -224,14 +237,14 @@ def run_agy(
     if kill_reason:
         secs = idle_timeout if kill_reason == "idle" else timeout
         raise subprocess.TimeoutExpired(
-            cmd=[command, "--model", model],
+            cmd=[command, "--add-dir", workspace_dir, "--model", model],
             timeout=secs,
             output=stdout,
             stderr="",
         )
 
     return subprocess.CompletedProcess(
-        args=[command, "--model", model, "-p", "..."],
+        args=[command, "--add-dir", workspace_dir, "--model", model, "-p", "..."],
         returncode=0,
         stdout=stdout,
         stderr="",

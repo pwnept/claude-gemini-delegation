@@ -12,21 +12,28 @@ Write-Host "Checking git status..." -ForegroundColor Cyan
 
 $GitStatus = git status --porcelain
 if ($GitStatus) {
-    Write-Host "Repository has uncommitted changes. Committing before audit..." -ForegroundColor Yellow
-    git add .
-    git commit -m "chore: auto-commit before Dave code audit"
+    Write-Host "Repository has uncommitted changes; auditing the working tree as-is." -ForegroundColor Yellow
 } else {
     Write-Host "Repository is clean." -ForegroundColor Green
 }
 
 $CommitHash = git rev-parse --short HEAD
 $DateTime   = Get-Date -Format "yyyyMMdd_HHmmss"
-$ReportPath = "audit\agy-gemini-3.1-pro_audit_${DateTime}_${CommitHash}.md"
+$ReportPath = "audit\agy-research_audit_${DateTime}_${CommitHash}.md"
 
 Write-Host "Starting Dave Code Review Agent..." -ForegroundColor Cyan
-Write-Host "Model: Gemini 3.1 Pro (via agy)"    -ForegroundColor DarkGray
+Write-Host "Model profile: agy research"         -ForegroundColor DarkGray
 Write-Host "Report: $ReportPath"                 -ForegroundColor DarkGray
 
 $Prompt = "Conduct a deep and thorough code audit and verification. @agents\code-review-agent-dave\dave_audit.md. Never fix code directly. Only report your findings. Once you have completed your analysis, you MUST generate a final report and save it to the file path: $ReportPath"
 
-$Prompt | python3 "$ProjectRoot\hooks\gemini_delegate.py" --profile research
+$Pipeline = Join-Path $ProjectRoot ".claude\hooks\delegate_and_log.ps1"
+if (-not (Test-Path -LiteralPath $Pipeline)) {
+    $Pipeline = Join-Path $ProjectRoot "hooks\delegate_and_log.ps1"
+}
+if (-not (Test-Path -LiteralPath $Pipeline)) {
+    throw "Delegation pipeline not found. Run setup.py or install-delegation.ps1 first."
+}
+
+& $Pipeline $Prompt "Dave code audit" 0 -Profile research
+exit $LASTEXITCODE

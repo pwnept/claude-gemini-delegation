@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pre-delegation hook for Claude Code -> Gemini delegation
+Pre-delegation hook for Claude Code/Codex -> agy delegation
 Automatically formats and optimizes delegation prompts
 Zero token cost - runs locally before Claude sees anything
 

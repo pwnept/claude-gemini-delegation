@@ -1,4 +1,4 @@
-# Claude Code + agy Delegation
+# Codex + Claude Code + Antigravity Delegation
 
 **Preserve 50-70% of your Claude Code token quota** by delegating high-cost operations to agy (Antigravity), which routes to Gemini and other models via Google AI Pro.
 
@@ -32,7 +32,7 @@ Delegate token-heavy operations to agy (which routes to Gemini models via Google
 
 - **Python 3.8+**
 - **Claude Code** installed
-- **agy (Antigravity IDE):** download from [antigravity.dev](https://antigravity.dev) and sign in with a Google AI Pro account
+- **Antigravity CLI (`agy`):** install from the [official download page](https://antigravity.google/download) and sign in
 - **pywinpty** (Windows only, for subprocess capture): `pip3 install pywinpty`
 
 ### Installation
@@ -45,9 +45,9 @@ cd claude-gemini-delegation
 
 #### Option A: Windows Interactive Installer
 
-From this repository, run the PowerShell installer. It requests elevation,
-asks for the project directory when one is not provided, installs or updates
-all Claude and Codex delegation files, and verifies the result:
+From this repository, run the PowerShell installer. It asks for the project
+directory when one is not provided, installs or updates the Claude Code,
+Codex, and Antigravity files, and verifies the result:
 
 ```powershell
 .\install-delegation.ps1
@@ -87,7 +87,10 @@ python3 setup.py --all-clis
 
 On Windows, generated examples use `gemini_delegate.py`, which calls
 `agy.exe` via pywinpty ConPTY and falls back across Gemini 3.5 Flash and
-3.1 Pro model pools when agy reports capacity errors. Windows
+3.1 Pro model pools when agy reports capacity errors. The runner launches from
+a neutral temporary directory but attaches the caller's repository with
+`agy --add-dir`, preserving codebase context without triggering interactive
+workspace mode. Windows
 wrappers resolve Python 3 explicitly (`py -3`, then `python3`, then a verified
 Python 3 `python`) so machines with Python 2 on `PATH` do not silently break.
 
@@ -117,11 +120,11 @@ The installer configures:
 
 1. **Root CLAUDE.md** - Contains only `@AGENTS.md`
 2. **AGENTS.md** - Preserved project rules plus the managed delegation section
-3. **.claude/CLAUDE.md** - Generated Claude Code delegation reference
-4. **.claude/hooks** - Claude Code wrapper hooks
-5. **.claude/settings.json** - Claude Code PreToolUse guard for known high-output Bash commands
-6. **.Codex/hooks** - Codex wrapper hooks
-7. **delegation_config.json** - Enabled CLI configuration in both hook roots
+3. **.claude/hooks** - Claude Code wrapper hooks
+4. **.claude/settings.json** - Claude Code PreToolUse guard for known high-output commands
+5. **.codex/hooks** - Codex wrapper hooks (routing is instructed by `AGENTS.md`)
+6. **.agents/rules/delegation.md** - Antigravity IDE workspace rule
+7. **.gemini-delegation/delegation_config.json** - Shared backend configuration
 
 ### Optional: Delegation Hooks
 
@@ -130,7 +133,7 @@ If you want automated prompt formatting:
 ```bash
 python3 setup_hooks.py
 
-# Installs cross-platform hooks to .claude/hooks/ and .Codex/hooks/:
+# Installs cross-platform hooks to .claude/hooks/ and .codex/hooks/:
 # - pre_delegate.py (prompt formatter)
 # - post_delegate.py (response validator)
 # - analyze_metrics.py (usage analyzer)
@@ -151,7 +154,9 @@ multi-file reading.
 
 ### Delegation Rules
 
-Your `AGENTS.md` configures strict rules for when Claude or Codex MUST delegate:
+Your `AGENTS.md` configures strict rules for when Claude or Codex MUST delegate.
+Antigravity reads the same project guidance but works directly instead of
+recursively invoking `agy`:
 
 **Subagent policy — allowed vs. banned:**
 
@@ -244,7 +249,7 @@ python3 setup.py
 # Interactive installer:
 # - Detects installed CLIs
 # - Enables agy by default; extra CLIs require --enable-cli or --all-clis
-# - Installs or updates AGENTS.md, CLAUDE.md, .claude, and .Codex hook roots
+# - Installs or updates AGENTS.md, CLAUDE.md, .claude, .codex, and .agents
 ```
 
 ### Option 2: Manual Setup (Minimal)
@@ -291,10 +296,10 @@ python3 setup_hooks.py
 
 ### Updating Token Budget
 
-Keep Claude aware of token pressure by updating CLAUDE.md:
+Keep Claude and Codex aware of token pressure by updating `AGENTS.md`:
 
 ```markdown
-# In your .claude/CLAUDE.md
+# In your AGENTS.md
 **Budget: 19K tokens per 5hr | Remaining: 14,200**
 **Status: WARNING (below 15K)**
 ```
@@ -352,13 +357,12 @@ python3 .claude/hooks/analyze_metrics.py
 
 **Solutions:**
 
-1. **Verify CLAUDE.md location:**
+1. **Verify the project instruction bridge:**
    ```bash
-   # Check project-specific
-   ls .claude/CLAUDE.md
-   
-   # Check global
-   ls ~/.claude/CLAUDE.md
+   cat CLAUDE.md
+   # Expected: @AGENTS.md
+
+   ls AGENTS.md
    ```
 
 2. **Restart Claude Code:**
@@ -467,7 +471,10 @@ python3 setup.py --target /path/to/your/project
 | `start-audit.ps1` | Code review session via agy (Gemini 3.1 Pro) |
 | `generate-audit.ps1` | Exhaustive automated audit; flags everything pedantically |
 
-Both scripts auto-commit uncommitted changes before auditing, then save the report to `audit/agy-gemini-3.1-pro_audit_<datetime>_<hash>.md`. The `audit/` folder is gitignored.
+Both scripts audit the current working tree without committing it, then save
+the report to `audit/agy-research_audit_<datetime>_<hash>.md`. The `audit/`
+folder is gitignored. Installed copies use `.claude/hooks`; this source
+repository falls back to `hooks/`.
 
 Run from the project root:
 ```powershell

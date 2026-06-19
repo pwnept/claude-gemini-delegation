@@ -8,7 +8,7 @@ import subprocess
 import datetime
 from pathlib import Path
 
-SUPPORTED_CLIS = ("gemini", "aider", "copilot", "gpt-me")
+SUPPORTED_CLIS = ("agy", "aider", "copilot", "gpt-me")
 ROOT_CLAUDE_IMPORTS = ("@AGENTS.md",)
 LEGACY_ROOT_CLAUDE_IMPORTS = ("@AGENTS.md", "@.claude/CLAUDE.md")
 AGENTS_MARKER_BEGIN = "> [claude-gemini-delegation:agents-begin]"
@@ -38,7 +38,11 @@ def check_python_version():
 def discover_clis():
     """Discover installed AI CLIs."""
     clis = {
-        "gemini": {"name": "Gemini CLI", "command": "gemini", "description": "Google's Gemini models via CLI"},
+        "agy": {
+            "name": "agy (Antigravity CLI)",
+            "command": "agy",
+            "description": "Google Antigravity models via agy CLI",
+        },
         "aider": {"name": "Aider", "command": "aider", "description": "AI pair programming in the terminal"},
         "copilot": {"name": "GitHub Copilot CLI", "command": "gh copilot", "description": "GitHub Copilot extensions for gh"},
         "gpt-me": {"name": "gpt-me", "command": "gpt-me", "description": "A CLI to chat with LLMs and execute code"}
@@ -77,7 +81,7 @@ def command_available(command):
 def interactive_selection(discovered, enabled_cli_names=None, enable_all=False):
     """Select which CLIs to enable.
 
-    By default, only Gemini is enabled. Additional CLIs are opt-in via setup.py
+    By default, only agy is enabled. Additional CLIs are opt-in via setup.py
     flags so a machine with gh/aider installed does not silently change routing.
     """
     print("\n\033[1m--- CLI Selection ---\033[0m")
@@ -86,7 +90,7 @@ def interactive_selection(discovered, enabled_cli_names=None, enable_all=False):
     if enable_all:
         requested = set(SUPPORTED_CLIS)
     else:
-        requested = set(enabled_cli_names or ("gemini",))
+        requested = set(enabled_cli_names or ("agy",))
 
     for key, info in discovered.items():
         status = "\033[92m[Found]\033[0m" if info["installed"] else "\033[93m[Not Found]\033[0m"
@@ -127,7 +131,7 @@ def generate_delegation_config(selected_clis):
         "version": "1.0.0",
         "cli_configs": selected_clis,
         "preferences": {
-            "default_cli": list(selected_clis.keys())[0] if selected_clis else "gemini",
+            "default_cli": list(selected_clis.keys())[0] if selected_clis else "agy",
             "max_tokens_per_task": 50000,
             "auto_delegate_min_lines": 500
         }
@@ -184,9 +188,9 @@ def ensure_root_claude_bridge(project_dir: Path):
 
 def build_agents_section():
     """Return the managed AGENTS.md delegation section."""
-    body = """## Gemini Delegation
+    body = """## Antigravity Delegation
 
-Gemini delegation is installed locally in `.claude/hooks` and `.Codex/hooks`.
+agy delegation is installed locally in `.claude/hooks` and `.codex/hooks`.
 
 Use delegation for token-heavy or broad read-only work:
 - Commands expected to produce more than 500 lines of output
@@ -208,7 +212,7 @@ Claude Code (PowerShell tool):
 
 Codex (PowerShell tool):
 ```powershell
-& .Codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
+& .codex/hooks/delegate_and_log.ps1 "analyze @src/ for performance issues" "Optimization task" 10
 ```
 
 For documentation lookup or web search, add `-Profile research`.
@@ -228,11 +232,14 @@ Available Claude Code subagent types and their status:
 | `Plan` | Low | **Allowed** | Design-only; no file reads or web calls |
 | `statusline-setup` | Very low | **Allowed** | Single-purpose config; fully bounded |
 | `claude-code-guide` | Medium | Allowed | Claude Code / API questions; may use WebFetch |
-| `Explore` | High | **Banned** | Many file reads/greps — delegate to Gemini instead |
-| `general-purpose` | High | **Banned** | Uses WebSearch/WebFetch — use Gemini `--profile research` |
-| `claude` | Unpredictable | **Banned** | Catch-all; use Gemini for broad tasks |
+| `Explore` | High | **Banned** | Many file reads/greps — delegate to agy instead |
+| `general-purpose` | High | **Banned** | Uses WebSearch/WebFetch — use agy `--profile research` |
+| `claude` | Unpredictable | **Banned** | Catch-all; use agy for broad tasks |
 
-For delegation tasks, banned operations, or large-output work: use the Gemini hooks, not Claude subagents.
+For delegation tasks, banned operations, or large-output work: use the agy hooks, not Claude subagents.
+
+When the current agent is Antigravity or agy itself, do the work directly.
+Do not recursively invoke agy from inside an Antigravity agent session.
 
 Keep project-specific agent instructions outside this managed section. Rerunning
 setup updates only this block.
@@ -261,7 +268,7 @@ def normalize_agents_content(existing):
 
 
 def ensure_dot_claude_bridge(claude_dir: Path) -> str:
-    """Replace .claude/CLAUDE.md with a bridge to ../AGENTS.md.
+    """Migrate .claude/CLAUDE.md content and remove the redundant bridge.
 
     Returns any user content that was outside the managed delegation section
     so it can be migrated into AGENTS.md.
@@ -271,7 +278,8 @@ def ensure_dot_claude_bridge(claude_dir: Path) -> str:
     if claude_md.exists():
         existing = claude_md.read_text(encoding="utf-8")
         if existing == DOT_CLAUDE_BRIDGE:
-            print(f"\033[92m[SUCCESS] .claude/CLAUDE.md is already a bridge to AGENTS.md\033[0m")
+            claude_md.unlink()
+            print(f"\033[92m[SUCCESS] Removed redundant .claude/CLAUDE.md bridge\033[0m")
             return ""
 
         # Strip managed delegation section, keep any surrounding user content
@@ -294,8 +302,9 @@ def ensure_dot_claude_bridge(claude_dir: Path) -> str:
     else:
         user_content = ""
 
-    claude_md.write_text(DOT_CLAUDE_BRIDGE, encoding="utf-8")
-    print(f"\033[92m[SUCCESS] .claude/CLAUDE.md is now a bridge to AGENTS.md\033[0m")
+    if claude_md.exists():
+        claude_md.unlink()
+        print(f"\033[92m[SUCCESS] Migrated and removed .claude/CLAUDE.md\033[0m")
     return user_content + "\n" if user_content else ""
 
 

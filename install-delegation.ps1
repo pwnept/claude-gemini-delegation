@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ProjectDir,
-    [ValidateSet("gemini", "aider", "copilot", "gpt-me")]
+    [ValidateSet("agy", "aider", "copilot", "gpt-me")]
     [string[]]$EnableCli = @(),
     [switch]$AllClis,
     [switch]$NoElevate,
@@ -103,7 +103,6 @@ function Test-DelegationInstall {
         ".gemini-delegation\hooks\delegate_and_log.ps1",
         ".gemini-delegation\delegation_config.json",
         # Claude per-env shims
-        ".claude\CLAUDE.md",
         ".claude\hooks\delegate.ps1",
         ".claude\hooks\delegate.bat",
         ".claude\hooks\delegate",
@@ -111,12 +110,13 @@ function Test-DelegationInstall {
         ".claude\hooks\delegation_guard.ps1",
         ".claude\settings.json",
         # Codex per-env shims
-        ".Codex\hooks\delegate.ps1",
-        ".Codex\hooks\delegate.bat",
-        ".Codex\hooks\delegate",
-        ".Codex\hooks\delegate_and_log.ps1",
-        ".Codex\hooks\delegation_guard.ps1",
-        ".Codex\settings.json"
+        ".codex\hooks\delegate.ps1",
+        ".codex\hooks\delegate.bat",
+        ".codex\hooks\delegate",
+        ".codex\hooks\delegate_and_log.ps1",
+        ".codex\hooks\delegation_guard.ps1",
+        # Antigravity IDE workspace rule
+        ".agents\rules\delegation.md"
     )
 
     foreach ($relative in $required) {
@@ -139,7 +139,7 @@ function Test-DelegationInstall {
         throw "Claude PowerShell delegation wrapper smoke test failed."
     }
 
-    $codexWrapper = Join-Path $TargetDir ".Codex\hooks\delegate.ps1"
+    $codexWrapper = Join-Path $TargetDir ".codex\hooks\delegate.ps1"
     $codexPrompt = & $codexWrapper "npm ls" "Codex delegation smoke test" 5
     $codexPromptText = $codexPrompt -join "`n"
     if ($LASTEXITCODE -ne 0 -or $codexPromptText -notmatch "Codex delegation smoke test") {
@@ -171,12 +171,6 @@ function Test-DelegationInstall {
     }
 }
 
-if (-not $NoElevate -and -not (Test-IsAdministrator)) {
-    Write-Host "Requesting administrator elevation for the delegation installer..."
-    Invoke-SelfElevated
-    exit 0
-}
-
 try {
     $targetDir = Resolve-ProjectDirectory -InitialPath $ProjectDir
     $setupPy = Join-Path $PSScriptRoot "setup.py"
@@ -203,7 +197,7 @@ try {
     Test-DelegationInstall -TargetDir $targetDir
     Write-Host ""
     Write-Host "Delegation install/update completed successfully."
-    Write-Host "Restart Claude Code or clear/reload context before relying on the new instructions."
+    Write-Host "Restart Claude Code, Codex, and Antigravity (or reload their workspace) before relying on the new instructions."
 }
 finally {
     if ($LaunchedElevated) {

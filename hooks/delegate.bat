@@ -1,3 +1,3 @@
 @echo off
 REM Delegation wrapper script
-python "%~dp0pre_delegate.py" %*
+py -3 "%~dp0pre_delegate.py" %*

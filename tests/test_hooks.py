@@ -91,6 +91,10 @@ class TestAnalyzeMetrics(unittest.TestCase):
 class TestDelegationGuard(unittest.TestCase):
     """Test Claude Code PreToolUse guard routing."""
 
+    def test_source_checkout_guidance_uses_source_hooks(self):
+        self.assertEqual(delegation_guard._HOOK_PREFIX, "hooks")
+        self.assertEqual(delegation_guard._RUNNER_PATH, "hooks/gemini_delegate.py")
+
     def run_guard(self, payload):
         stdin = io.StringIO(json.dumps(payload))
         stderr = io.StringIO()

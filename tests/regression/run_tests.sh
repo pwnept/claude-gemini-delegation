@@ -22,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Header
 echo ""
 echo -e "${CYAN}=========================================${NC}"
-echo -e "${CYAN}  Gemini Delegation Regression Tests${NC}"
+echo -e "${CYAN}  Antigravity Delegation Regression Tests${NC}"
 echo -e "${CYAN}=========================================${NC}"
 echo ""
 echo "Test Session Date: $(date +%Y-%m-%d)"
@@ -36,7 +36,7 @@ if command -v agy &> /dev/null; then
   echo -e "${GREEN}OK${NC}"
 else
   echo -e "${RED}MISSING${NC}"
-  echo "Please install agy (Antigravity IDE) from https://antigravity.dev"
+  echo "Please install agy from https://antigravity.google/download"
   exit 1
 fi
 

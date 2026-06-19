@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Post-delegation hook for Claude Code -> Gemini delegation
-Validates Gemini's response quality and logs metrics
+Post-delegation hook for Claude Code/Codex -> agy delegation
+Validates agy's response quality and logs metrics
 
 Usage:
     python post_delegate.py <response> [max_lines] [task_context]
@@ -52,7 +52,7 @@ def validate_response(response: str, max_lines: int) -> Tuple[bool, list]:
     # Check if response is too brief (might be missing context)
     if actual_lines < 3:
         warnings.append(f"⚠️  WARNING: Response very brief ({actual_lines} lines)")
-        warnings.append("   Suggestion: Check if Gemini understood the task")
+        warnings.append("   Suggestion: Check if agy understood the task")
     
     # Check token efficiency
     if token_estimate > 1000:
@@ -145,7 +145,7 @@ def main():
     hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
     if hook_prefix:
         prefix_path = Path(hook_prefix)
-        if prefix_path.parent.name in (".claude", ".Codex"):
+        if prefix_path.parent.name in (".claude", ".codex", ".Codex"):
             agent_dir = prefix_path.parent
 
     # 2. Search up the tree (.gemini-delegation preferred over .claude)
