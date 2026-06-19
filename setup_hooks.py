@@ -238,7 +238,11 @@ def create_env_shims(hooks_dir: Path):
         "$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
         '$ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\\.."))\n'
         f'$env:DELEGATION_HOOK_PREFIX = "{env_dir_name}/hooks"\n'
-        "$InputPayload = [Console]::In.ReadToEnd()\n"
+        "if ($MyInvocation.ExpectingInput) {\n"
+        "    $InputPayload = ($input | Out-String).TrimEnd()\n"
+        "} else {\n"
+        "    $InputPayload = \"\"\n"
+        "}\n"
         '$InputPayload | & (Join-Path $ProjectRoot ".gemini-delegation\\hooks\\delegation_guard.ps1")\n'
         "exit $LASTEXITCODE\n",
         encoding="utf-8",
@@ -343,7 +347,7 @@ def create_claude_settings(claude_dir):
     settings_path = claude_dir / "settings.json"
     hook_root = claude_dir.name
     command = (
-        f"powershell -NoProfile -ExecutionPolicy Bypass -File {hook_root}/hooks/delegation_guard.ps1"
+        f"pwsh -NoProfile -ExecutionPolicy Bypass -File {hook_root}/hooks/delegation_guard.ps1"
         if platform.system() == "Windows"
         else f"python3 {hook_root}/hooks/delegation_guard.py"
     )
@@ -390,12 +394,17 @@ def create_claude_settings(claude_dir):
     for matcher in matchers_needed:
         pre_tool_use.append({"matcher": matcher, "hooks": [hook_def]})
 
+    new_settings_text = json.dumps(settings, indent=2) + "\n"
     if settings_path.exists():
+        if settings_path.read_text(encoding="utf-8") == new_settings_text:
+            print("[OK] " + hook_root + "/settings.json delegation guard already up to date")
+            return
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = settings_path.with_name("settings.json.bak." + timestamp)
         shutil.copy2(settings_path, backup_path)
 
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    settings_path.write_text(new_settings_text, encoding="utf-8")
     print("[OK] Updated " + hook_root + "/settings.json delegation guard (Bash + PowerShell)")
 
 
