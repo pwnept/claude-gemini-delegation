@@ -31,6 +31,28 @@ class TestAgyDelegate(unittest.TestCase):
         self.assertEqual(gemini_delegate.parse_duration_seconds("reset after 2 minutes"), 120)
         self.assertEqual(gemini_delegate.parse_duration_seconds("no reset hint"), 0)
 
+    def test_parse_model_order_preserves_qualified_model_names(self):
+        self.assertEqual(
+            gemini_delegate.parse_model_order("Gemini 3.5 Flash (Medium)"),
+            ["Gemini 3.5 Flash (Medium)"],
+        )
+        self.assertEqual(
+            gemini_delegate.parse_model_order('"Gemini 3.1 Pro (Low)" "Gemini 3.5 Flash (Medium)"'),
+            ["Gemini 3.1 Pro (Low)", "Gemini 3.5 Flash (Medium)"],
+        )
+        self.assertEqual(
+            gemini_delegate.parse_model_order('"Gemini 3.1 Pro (Low)","Gemini 3.5 Flash (Medium)"'),
+            ["Gemini 3.1 Pro (Low)", "Gemini 3.5 Flash (Medium)"],
+        )
+
+    def test_incomplete_model_names_are_rejected(self):
+        errors = gemini_delegate.model_name_errors(["Gemini 3.5 Flash"])
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Gemini 3.5 Flash (Medium)", errors[0])
+        self.assertIn("Gemini 3.5 Flash (High)", errors[0])
+        self.assertIn("Gemini 3.5 Flash (Low)", errors[0])
+
     def test_falls_back_after_capacity_error(self):
         calls = []
 
@@ -64,7 +86,7 @@ class TestAgyDelegate(unittest.TestCase):
                         code = gemini_delegate.main()
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls, [gemini_delegate.RESEARCH_MODELS[0]])
+        self.assertEqual(calls, ["Gemini 3.1 Pro (Low)"])
 
 
 if __name__ == "__main__":

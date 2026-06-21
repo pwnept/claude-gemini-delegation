@@ -12,9 +12,11 @@ the next configured model pool.
 """
 
 import argparse
+import csv
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -33,14 +35,25 @@ if hasattr(sys.stdout, "reconfigure"):
 
 DEFAULT_MODELS = [
     "Gemini 3.5 Flash (Medium)",
-    "Gemini 3.5 Flash (Low)",
     "Gemini 3.5 Flash (High)",
+    "Gemini 3.5 Flash (Low)",
 ]
 
 RESEARCH_MODELS = [
-    "Gemini 3.1 Pro (High)",
     "Gemini 3.1 Pro (Low)",
+    "Gemini 3.1 Pro (High)",
     "Gemini 3.5 Flash (Medium)",
+]
+
+KNOWN_AGY_MODELS = [
+    "Gemini 3.5 Flash (Medium)",
+    "Gemini 3.5 Flash (High)",
+    "Gemini 3.5 Flash (Low)",
+    "Gemini 3.1 Pro (Low)",
+    "Gemini 3.1 Pro (High)",
+    "Claude Sonnet 4.6 (Thinking)",
+    "Claude Opus 4.6 (Thinking)",
+    "GPT-OSS 120B (Medium)",
 ]
 
 CAPACITY_PATTERNS = (
@@ -119,6 +132,61 @@ def capacity_limited(text: str) -> bool:
     return any(pattern in lowered for pattern in CAPACITY_PATTERNS)
 
 
+def parse_model_order(text: str) -> list[str]:
+    """Parse agy model fallback names, preserving spaces in quoted names."""
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    if text in KNOWN_AGY_MODELS:
+        return [text]
+
+    if any(sep in text for sep in (",", ";", "\n")):
+        normalized = re.sub(r"[;\n]+", ",", text)
+        try:
+            return [
+                model.strip()
+                for model in next(csv.reader([normalized], skipinitialspace=True))
+                if model.strip()
+            ]
+        except csv.Error:
+            return [part.strip() for part in normalized.split(",") if part.strip()]
+
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return [text]
+
+    if len(parts) <= 1:
+        return parts
+
+    # A single unquoted agy model contains spaces. If it is not clearly a
+    # shell-style list of quoted models, preserve it as one model name.
+    if '"' not in text and "'" not in text:
+        return [text]
+    return parts
+
+
+def model_name_errors(models: list[str]) -> list[str]:
+    """Return helpful errors for agy model names missing required qualifiers."""
+    errors = []
+    for model in models:
+        if model in KNOWN_AGY_MODELS:
+            continue
+        matches = [
+            known for known in KNOWN_AGY_MODELS
+            if known.startswith(model + " ")
+        ]
+        if matches:
+            errors.append(
+                "{0!r} is incomplete. agy requires the full model name, e.g. {1}.".format(
+                    model,
+                    ", ".join(repr(match) for match in matches),
+                )
+            )
+    return errors
+
+
 def model_available(model: str, state: dict, now: float) -> bool:
     cooldown_until = state.get("cooldowns", {}).get(model, 0)
     try:
@@ -189,7 +257,7 @@ def run_agy(
         import winpty
     except ImportError:
         raise RuntimeError(
-            "pywinpty is required to capture agy output: pip3 install pywinpty"
+            "pywinpty is required to capture agy output: py -3 -m pip install --user pywinpty"
         )
 
     # Run from a neutral temp dir — agy detects git workspaces and enters
@@ -276,7 +344,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("prompt", nargs="?", help="Prompt to send. If omitted, stdin is used.")
     parser.add_argument(
         "--models",
-        help="Comma-separated model fallback order.",
+        help=(
+            "Model fallback order. Accepts comma-separated names or shell-style "
+            "quoted names, e.g. --models '\"Gemini 3.1 Pro (Low)\",\"Gemini 3.5 Flash (Medium)\"'."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -341,9 +412,15 @@ def main() -> int:
     if model_order is None:
         model_order = ",".join(RESEARCH_MODELS if args.profile == "research" else DEFAULT_MODELS)
 
-    models = [model.strip() for model in model_order.split(",") if model.strip()]
+    models = parse_model_order(model_order)
     if not models:
         print("No models configured.", file=sys.stderr)
+        return 2
+
+    errors = model_name_errors(models)
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
         return 2
 
     claude_dir = find_agent_dir(Path.cwd())

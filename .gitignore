@@ -5,6 +5,7 @@ metrics/
 # Delegation response files
 temp/agy-*.md
 temp/gemini-*.md
+temp/delegation-uninstall-*.md
 
 # Dave code audit reports
 audit/

@@ -10,10 +10,14 @@ This script:
 4. Validates Python installation
 
 Usage:
-    python setup-hooks.py [--user]
+    python setup_hooks.py [user|local]
 
-Options:
-    --user    Install in user's home directory (~/.claude)
+Scope:
+    user     Install user-wide hooks under ~/.claude and ~/.gemini-delegation (default)
+    local    Install project-local hooks under ./.claude and ./.gemini-delegation
+
+Prefer the positional scope over old flag-style invocations. `--user` is still
+accepted as a compatibility alias for `user`.
 """
 
 import sys
@@ -49,14 +53,14 @@ AGENTS_MARKER_BEGIN = "> [claude-gemini-delegation:agents-begin]"
 AGENTS_MARKER_END = "> [claude-gemini-delegation:agents-end]"
 MIGRATED_CLAUDE_MARKER_BEGIN = "> [claude-gemini-delegation:migrated-claude-begin]"
 MIGRATED_CLAUDE_MARKER_END = "> [claude-gemini-delegation:migrated-claude-end]"
-OLD_DEFAULT_AGENTS_TEXT = """# Agent Instructions
-
-Gemini delegation is installed locally in `.claude/hooks`.
-
-The root `CLAUDE.md` also loads `.claude/CLAUDE.md`; follow that generated
-configuration for delegation presets, wrapper usage, and Gemini fallback
-behavior.
-"""
+OLD_DEFAULT_AGENTS_TEXT = (
+    "# Agent Instructions\n\n"
+    + "Gemini"
+    + " delegation is installed locally in `.claude/hooks`.\n\n"
+    "The root `CLAUDE.md` also loads `.claude/CLAUDE.md`; follow that generated\n"
+    "configuration for delegation presets, wrapper usage, and " + "Gemini" + " fallback\n"
+    "behavior.\n"
+)
 
 
 def get_codex_dir(project_dir):
@@ -525,7 +529,10 @@ def build_agents_section():
     """Return the managed AGENTS.md delegation section."""
     body = """## Antigravity Delegation
 
-agy delegation is installed locally in `.claude/hooks` and `.codex/hooks`.
+Antigravity/Gemini delegation is installed locally in `.claude/hooks` and
+`.codex/hooks`. Antigravity CLI (`agy`) is the executable path; Gemini is the
+AI agent/model pool reached through agy. Do not call a direct `gemini`
+executable for this workflow.
 
 ### Always Delegate
 
@@ -576,7 +583,7 @@ run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(..
 **Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-echo "$PROMPT" | python3 .claude/hooks/gemini_delegate.py
+echo "$PROMPT" | python3 .gemini-delegation/hooks/gemini_delegate.py
 ```
 
 The PowerShell wrappers resolve Python 3 explicitly (`py -3`, then `python3`,
@@ -781,7 +788,7 @@ def create_antigravity_rule(project_dir):
     print("[OK] Created Antigravity workspace rule: " + str(rule_path))
 
 
-def print_next_steps(claude_dir, is_user_install):
+def print_next_steps(claude_dir, is_user_install=False):
     """Print next steps for the user."""
     print("\n" + "=" * 60)
     print("Setup Complete!")
@@ -794,7 +801,7 @@ def print_next_steps(claude_dir, is_user_install):
 
     if is_user_install:
         print("\n1. This is a user-wide installation")
-        print("   Hooks will be available for all your projects")
+        print("   Hooks are available from your user Claude directory")
     else:
         print("\n1. This is a project-specific installation")
         print("   Hooks are only available in this project")
@@ -819,11 +826,11 @@ def print_next_steps(claude_dir, is_user_install):
 
     if platform.system() == 'Windows':
         print("   $prompt = & " + test_cmd)
-        print("   $prompt | py -3 .claude\\hooks\\gemini_delegate.py")
+        print("   $prompt | py -3 .gemini-delegation\\hooks\\gemini_delegate.py")
         print("   .claude\\hooks\\delegate_and_log.ps1 \"git status\" \"Test delegation\" 5")
     else:
         print("   PROMPT=$(" + test_cmd + ")")
-        print('   echo "$PROMPT" | python3 .claude/hooks/gemini_delegate.py')
+        print('   echo "$PROMPT" | python3 .gemini-delegation/hooks/gemini_delegate.py')
 
     print("\nDocumentation:")
     print("   " + str(claude_dir / "hooks" / "README.md"))
@@ -846,8 +853,22 @@ def main():
     check_python_version()
 
     # Determine installation location
-    is_user_install = '--user' in sys.argv
+    raw_args = [arg for arg in sys.argv[1:] if arg]
+    if "--user" in raw_args:
+        raw_args.remove("--user")
+        raw_args.append("user")
+        print("\n[WARNING] `--user` is deprecated; use positional `user` instead.")
+    if "--local" in raw_args:
+        raw_args.remove("--local")
+        raw_args.append("local")
+        print("\n[WARNING] `--local` is deprecated; use positional `local` instead.")
 
+    if len(raw_args) > 1 or any(arg not in ("user", "local") for arg in raw_args):
+        print("\n[ERROR] Usage: python setup_hooks.py [user|local]")
+        sys.exit(2)
+
+    scope = raw_args[0] if raw_args else "user"
+    is_user_install = scope == "user"
     if is_user_install:
         base_dir = Path.home() / ".claude"
         print("\nInstalling to user directory: " + str(base_dir))

@@ -18,14 +18,14 @@ MIGRATED_CLAUDE_MARKER_END = "> [claude-gemini-delegation:migrated-claude-end]"
 CLAUDE_MARKER_BEGIN = "> [claude-gemini-delegation:begin]"
 CLAUDE_MARKER_END = "> [claude-gemini-delegation:end]"
 DOT_CLAUDE_BRIDGE = "@../AGENTS.md\n"
-OLD_DEFAULT_AGENTS_TEXT = """# Agent Instructions
-
-Gemini delegation is installed locally in `.claude/hooks`.
-
-The root `CLAUDE.md` also loads `.claude/CLAUDE.md`; follow that generated
-configuration for delegation presets, wrapper usage, and Gemini fallback
-behavior.
-"""
+OLD_DEFAULT_AGENTS_TEXT = (
+    "# Agent Instructions\n\n"
+    + "Gemini"
+    + " delegation is installed locally in `.claude/hooks`.\n\n"
+    "The root `CLAUDE.md` also loads `.claude/CLAUDE.md`; follow that generated\n"
+    "configuration for delegation presets, wrapper usage, and " + "Gemini" + " fallback\n"
+    "behavior.\n"
+)
 
 def check_python_version():
     """Ensure Python 3.6+ is installed."""
@@ -190,7 +190,10 @@ def build_agents_section():
     """Return the managed AGENTS.md delegation section."""
     body = """## Antigravity Delegation
 
-agy delegation is installed locally in `.claude/hooks` and `.codex/hooks`.
+Antigravity/Gemini delegation is installed locally in `.claude/hooks` and
+`.codex/hooks`. Antigravity CLI (`agy`) is the executable path; Gemini is the
+AI agent/model pool reached through agy. Do not call a direct `gemini`
+executable for this workflow.
 
 Use delegation for token-heavy or broad read-only work:
 - Commands expected to produce more than 500 lines of output

@@ -790,7 +790,7 @@ $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 **Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+echo "$PROMPT" | python3 .gemini-delegation/hooks/gemini_delegate.py
 ```
 
 ## Subagent Policy
@@ -799,11 +799,12 @@ Do **not** use Claude subagents for delegation work. Subagents spend Claude
 tokens and defeat this configuration's token-saving purpose.
 
 When a task matches any delegation preset, banned operation, or large-output
-condition, use the local hooks and Gemini CLI instead of spawning a Claude
-subagent. Only use Claude subagents when the user explicitly asks for Claude
-subagents by name.
+condition, use the local Antigravity/Gemini hooks instead of spawning a Claude
+subagent. Antigravity CLI (`agy`) is the executable path; Gemini is the AI
+agent/model pool reached through agy. Only use Claude subagents when the user
+explicitly asks for Claude subagents by name.
 
-## Always Delegate To Gemini
+## Always Delegate To Antigravity/Gemini
 
 - Commands expected to produce more than 500 lines of output
 - `npm ls`, `pip list`, `pip freeze`, and verbose dependency listings
@@ -811,7 +812,7 @@ subagents by name.
 - Recursive searches such as `find`, `grep -r`, or repository-wide scans
 - Reading or analyzing 3 or more new files
 - Security audits, vulnerability scans, XSS/SQL injection/CSRF checks
-- Documentation lookup or web search. Use `gemini_delegate.py --profile research` so Gemini Pro is tried before Flash.
+- Documentation lookup or web search. Use `gemini_delegate.py --profile research` so a Pro model is tried before Flash.
 - Broad codebase analysis, performance review, or inspection tasks
 
 ## Delegation Workflow
@@ -819,7 +820,7 @@ subagents by name.
 1. **Identify task type** - Security? Git ops? Analysis?
 2. **Check presets** - Is there a matching preset?
 3. **Use delegation hook** - Let the hook format the prompt
-4. **Execute with Gemini CLI** - Use `gemini_delegate.py`, not Claude subagents
+4. **Execute with agy** - Use `gemini_delegate.py`, not Claude subagents
 5. **Validate response** - Check quality with the post-delegation hook
 
 `.claude/settings.json` registers a PreToolUse Bash guard that blocks known
@@ -830,9 +831,9 @@ backstop; still delegate proactively when the task matches these rules.
 
 ### Security Audit
 ```bash
-# Auto-routes to Gemini (if enabled)
+# Auto-routes to Antigravity/Gemini (if enabled)
 PROMPT=$(./.claude/hooks/delegate "scan auth.py for vulnerabilities" "Pre-deploy security check")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+echo "$PROMPT" | python3 .gemini-delegation/hooks/gemini_delegate.py
 ```
 
 {git_operations_example}
@@ -840,13 +841,13 @@ gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
 ```bash
 # Routes based on configured preference
 PROMPT=$(./.claude/hooks/delegate "analyze @src/ for performance issues" "Optimization task")
-gemini --model {DEFAULT_GEMINI_MODEL} -p "$PROMPT"
+echo "$PROMPT" | python3 .gemini-delegation/hooks/gemini_delegate.py
 ```
 
 ### Research / Documentation / Web Search
 ```powershell
 $prompt = & .claude/hooks/delegate.ps1 "find current docs for deployment limits" "Research task"
-$prompt | py -3 .claude/hooks/gemini_delegate.py --profile research
+$prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py --profile research
 
 # Or:
 .claude/hooks/delegate_and_log.ps1 "find current docs for deployment limits" "Research task" 10 -Profile research
@@ -927,7 +928,10 @@ def _build_claude_md_body(config: Dict, presets: Dict) -> str:
 
     return f"""## Antigravity Delegation
 
-agy delegation is installed locally in `.claude/hooks` and `.codex/hooks`.
+Antigravity/Gemini delegation is installed locally in `.claude/hooks` and
+`.codex/hooks`. Antigravity CLI (`agy`) is the executable path; Gemini is the
+AI agent/model pool reached through agy. Do not call a direct `gemini`
+executable for this workflow.
 
 ### Enabled CLIs
 
@@ -986,7 +990,7 @@ run `.ps1` scripts. When generating commands, use `PowerShell(...)` not `Bash(..
 **Unix/Mac (Bash):**
 ```bash
 PROMPT=$(./.claude/hooks/delegate "npm ls" "Build analysis")
-echo "$PROMPT" | python3 .claude/hooks/gemini_delegate.py
+echo "$PROMPT" | python3 .gemini-delegation/hooks/gemini_delegate.py
 ```
 {git_ops_example}
 `.claude/settings.json` registers a PreToolUse Bash guard that blocks known
@@ -1136,14 +1140,14 @@ def show_next_steps(config: Dict):
         if os.name == "nt":
             print("   $prompt = & .claude\\hooks\\delegate.ps1 \"npm ls\" \"Test\"")
             if first_cli == "agy":
-                print("   $prompt | py -3 .claude\\hooks\\gemini_delegate.py")
+                print("   $prompt | py -3 .gemini-delegation\\hooks\\gemini_delegate.py")
                 print("   .claude\\hooks\\delegate_and_log.ps1 \"npm ls\" \"Test\" 5")
             else:
                 print(f"   # Send $prompt to {first_cli_cmd} using that CLI's prompt option")
         else:
             print(f"   PROMPT=$(./.claude/hooks/delegate \"npm ls\" \"Test\")")
             if first_cli == "agy":
-                print(f"   echo \"$PROMPT\" | python3 .claude/hooks/gemini_delegate.py")
+                print(f"   echo \"$PROMPT\" | python3 .gemini-delegation/hooks/gemini_delegate.py")
             else:
                 print(f"   # Send \"$PROMPT\" to {first_cli_cmd} using that CLI's prompt option")
     
