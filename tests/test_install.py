@@ -38,9 +38,12 @@ class TestTargetInstall(unittest.TestCase):
             self.assertIn(AGENTS_MARKER_BEGIN, agents_text)
             self.assertIn(AGENTS_MARKER_END, agents_text)
             self.assertTrue((project_dir / ".gemini-delegation" / "hooks" / "gemini_delegate.py").is_file())
-            self.assertTrue((project_dir / ".claude" / "hooks" / "delegate_and_log.ps1").is_file())
-            self.assertTrue((project_dir / ".codex" / "hooks" / "delegate_and_log.ps1").is_file())
+            self.assertTrue((project_dir / ".gemini-delegation" / "hooks" / "delegate_and_log.ps1").is_file())
+            self.assertTrue((project_dir / ".claude" / "commands" / "delegate.md").is_file())
             self.assertTrue((project_dir / ".agents" / "rules" / "delegation.md").is_file())
+            # shims must NOT be created in the no-shim layout
+            self.assertFalse((project_dir / ".claude" / "hooks" / "delegate_and_log.ps1").exists())
+            self.assertFalse((project_dir / ".codex" / "hooks" / "delegate_and_log.ps1").exists())
             self.assertTrue((project_dir / "agents" / "code-review-agent-dave" / "dave_audit.md").is_file())
 
     def test_install_skips_claude_migration_when_agents_already_has_same_text(self):
@@ -326,7 +329,7 @@ class TestManagedDocuments(unittest.TestCase):
                 for hook in entry["hooks"]
             ]
             self.assertIn("echo keep", commands)
-            self.assertEqual(sum("delegation_guard.ps1" in command for command in commands), 2)
+            self.assertEqual(sum(".gemini-delegation/hooks/delegation_guard.ps1" in command for command in commands), 2)
             self.assertFalse(any("delegation_guard.py" in command for command in commands))
 
     def test_migrates_legacy_codex_casing(self):

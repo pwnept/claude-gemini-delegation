@@ -21,17 +21,6 @@ MANAGED_FILES = (
     ".gemini-delegation/hooks/delegate.bat",
     ".gemini-delegation/hooks/delegate",
     ".gemini-delegation/delegation_config.json",
-    ".claude/hooks/delegate.ps1",
-    ".claude/hooks/delegate_and_log.ps1",
-    ".claude/hooks/delegation_guard.ps1",
-    ".claude/hooks/delegate.bat",
-    ".claude/hooks/delegate",
-    ".claude/settings.json",
-    ".codex/hooks/delegate.ps1",
-    ".codex/hooks/delegate_and_log.ps1",
-    ".codex/hooks/delegation_guard.ps1",
-    ".codex/hooks/delegate.bat",
-    ".codex/hooks/delegate",
     ".agents/rules/delegation.md",
     ".claude/commands/delegate.md",
 )
@@ -118,8 +107,8 @@ Delegate to `agy` for: security audits, web/doc search, reading 3+ new files,
 recursive repo scans, or expected output > 500 lines. Run from the repo root:
 
 ```powershell
-& .claude/hooks/delegate_and_log.ps1 "<task>" "<context>" 10
-& .claude/hooks/delegate_and_log.ps1 "<task>" "<context>" 10 -Profile research
+& .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10
+& .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10 -Profile research
 ```
 
 Set `DELEGATION_BACKEND=gemini-api` with a `GEMINI_API_KEY` from
@@ -254,7 +243,7 @@ Delegate the following task to the agy (Antigravity) Gemini backend using the
 in-repo delegation script. Run from the repository root and report the full output:
 
 ```powershell
-& .claude/hooks/delegate_and_log.ps1 "$ARGUMENTS" "/delegate" 10
+& .gemini-delegation/hooks/delegate_and_log.ps1 "$ARGUMENTS" "/delegate" 10
 ```
 
 Add `-Profile research` when the task involves web search, documentation
@@ -271,67 +260,12 @@ def create_claude_command(claude_dir: Path) -> None:
     print(f"[OK] Created {dest}")
 
 
-def _proxy_ps1(script_name: str) -> str:
-    return f"""[CmdletBinding()]
-param(
-    [Parameter(ValueFromPipeline = $true)]
-    [AllowNull()]
-    [object]$InputObject,
-
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [object[]]$RemainingArgs
-)
-begin {{
-    $PipelineInput = @()
-}}
-process {{
-    if ($null -ne $InputObject) {{
-        $PipelineInput += $InputObject
-    }}
-}}
-end {{
-    $Shared = Join-Path $PSScriptRoot "..\\..\\.gemini-delegation\\hooks\\{script_name}"
-    if (-not (Test-Path -LiteralPath $Shared)) {{
-        throw "Missing shared delegation hook: $Shared. Run install-delegation.ps1 install --target <repo>."
-    }}
-
-    if ($PipelineInput.Count -gt 0) {{
-        $PipelineInput | & $Shared @RemainingArgs
-    }} else {{
-        & $Shared @RemainingArgs
-    }}
-    exit $LASTEXITCODE
-}}
-"""
-
-
-def _proxy_bat(script_name: str) -> str:
-    return f"""@echo off
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0{script_name}.ps1" %*
-exit /b %ERRORLEVEL%
-"""
-
-
-def _proxy_sh(script_name: str) -> str:
-    return f"""#!/bin/sh
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../.gemini-delegation/hooks/{script_name}" "$@"
-"""
-
-
-def create_tool_shims(project_dir: Path) -> None:
-    for tool_dir in (project_dir / ".claude" / "hooks", get_codex_dir(project_dir) / "hooks"):
-        tool_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("delegate", "delegate_and_log", "delegation_guard"):
-            _write_if_changed(tool_dir / f"{name}.ps1", _proxy_ps1(f"{name}.ps1"), backup_existing=False)
-        _write_if_changed(tool_dir / "delegate.bat", _proxy_bat("delegate"), backup_existing=False)
-        _write_if_changed(tool_dir / "delegate", _proxy_sh("delegate"), backup_existing=False)
-        try:
-            (tool_dir / "delegate").chmod(0o755)
-        except OSError:
-            pass
-        print(f"[OK] Created {tool_dir} shims")
-    create_claude_command(project_dir / ".claude")
+def install_claude_command(project_dir: Path) -> None:
+    """Write the /delegate Claude command and ensure .claude/hooks/ dir exists."""
+    claude_dir = project_dir / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "hooks").mkdir(exist_ok=True)
+    create_claude_command(claude_dir)
 
 
 def create_claude_settings(claude_dir: Path) -> Path:
@@ -350,19 +284,20 @@ def create_claude_settings(claude_dir: Path) -> Path:
 
     hooks = settings.setdefault("hooks", {})
     pre_tool_use = hooks.setdefault("PreToolUse", [])
+    def _is_guard(hook: dict) -> bool:
+        if "delegation_guard" in hook.get("command", ""):
+            return True
+        return any("delegation_guard" in str(a) for a in (hook.get("args") or []))
+
     cleaned = []
     for entry in pre_tool_use:
-        entry_hooks = [
-            hook
-            for hook in entry.get("hooks", [])
-            if "delegation_guard" not in hook.get("command", "")
-        ]
+        entry_hooks = [h for h in entry.get("hooks", []) if not _is_guard(h)]
         if entry_hooks:
             copied = dict(entry)
             copied["hooks"] = entry_hooks
             cleaned.append(copied)
 
-    guard_command = "pwsh -NoProfile -ExecutionPolicy Bypass -File .claude/hooks/delegation_guard.ps1"
+    guard_command = "pwsh -NoProfile -ExecutionPolicy Bypass -File .gemini-delegation/hooks/delegation_guard.ps1"
     for matcher in ("Bash", "PowerShell"):
         cleaned.append(
             {
@@ -528,7 +463,7 @@ def install_hooks(
         migrated = migrate_claude_instructions(project_dir)
     ensure_agents_md(project_dir, migrated)
     copy_shared_hooks(project_dir)
-    create_tool_shims(project_dir)
+    install_claude_command(project_dir)
     create_claude_settings(project_dir / ".claude")
     create_antigravity_rule(project_dir)
     install_agents(project_dir)
@@ -595,23 +530,25 @@ def uninstall_hooks(scope: str = "local", target_dir: str = ".") -> int:
     failures: list[str] = []
 
     for relative in (
-        # shared implementation tree
+        # shared implementation tree (current)
         ".gemini-delegation",
-        # claude shims (new-style)
+        # claude command (current)
+        ".claude/commands/delegate.md",
+        # antigravity rule (current)
+        ".agents/rules/delegation.md",
+        # shims from the pre-collapse layout (safe no-op if absent)
         ".claude/hooks/delegate.ps1",
         ".claude/hooks/delegate_and_log.ps1",
         ".claude/hooks/delegation_guard.ps1",
         ".claude/hooks/delegate.bat",
         ".claude/hooks/delegate",
-        # claude legacy direct-copies (old-style; safe no-op if absent)
+        # legacy direct-copies (old-style; safe no-op if absent)
         ".claude/hooks/gemini_delegate.py",
         ".claude/hooks/pre_delegate.py",
         ".claude/hooks/post_delegate.py",
         ".claude/hooks/analyze_metrics.py",
         ".claude/hooks/delegation_guard.py",
-        # claude command
-        ".claude/commands/delegate.md",
-        # codex shims (new-style)
+        # codex shims from pre-collapse layout
         ".codex/hooks/delegate.ps1",
         ".codex/hooks/delegate_and_log.ps1",
         ".codex/hooks/delegation_guard.ps1",
@@ -623,8 +560,6 @@ def uninstall_hooks(scope: str = "local", target_dir: str = ".") -> int:
         ".codex/hooks/post_delegate.py",
         ".codex/hooks/analyze_metrics.py",
         ".codex/hooks/delegation_guard.py",
-        # antigravity rule
-        ".agents/rules/delegation.md",
     ):
         _remove_path(project_dir / relative, removed, failures)
 
