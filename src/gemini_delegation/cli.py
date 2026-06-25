@@ -19,7 +19,11 @@ def run_delegation(args, stdin_content: str) -> int:
 def install(args) -> int:
     from .installer import install_hooks
 
-    return install_hooks(target_dir=args.target, create_target=args.create_target)
+    return install_hooks(
+        target_dir=args.target,
+        create_target=args.create_target,
+        preserve_claude_md=getattr(args, "preserve_claude_md", False),
+    )
 
 
 def uninstall(args) -> int:
@@ -52,6 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser = subparsers.add_parser("install", help="Install local delegation files into a target repo")
     install_parser.add_argument("--target", required=True, help="Target repository directory")
     install_parser.add_argument("--create-target", action="store_true", help="Create the target directory if missing")
+    install_parser.add_argument(
+        "--preserve-claude-md",
+        action="store_true",
+        help=(
+            "Skip CLAUDE.md migration. Use when the repo has a hand-authored CLAUDE.md "
+            "that already imports @AGENTS.md on line 1."
+        ),
+    )
     install_parser.set_defaults(handler=install)
 
     verify_parser = subparsers.add_parser("verify", help="Verify an existing local delegation install")

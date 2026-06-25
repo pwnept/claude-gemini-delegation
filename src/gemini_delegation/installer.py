@@ -33,6 +33,7 @@ MANAGED_FILES = (
     ".codex/hooks/delegate.bat",
     ".codex/hooks/delegate",
     ".agents/rules/delegation.md",
+    ".claude/commands/delegate.md",
 )
 HOOK_FILES = (
     "pre_delegate.py",
@@ -111,57 +112,20 @@ def get_codex_dir(project_dir: Path) -> Path:
 
 def agents_section() -> str:
     return f"""{AGENTS_MARKER_BEGIN}
-## Antigravity Delegation
+## Delegation
 
-The delegation backend is `agy` (Antigravity CLI). The target project carries
-the delegation files locally so a fresh clone has the same agent instructions
-and hook entry points without relying on hidden global state.
-
-### Managed Files
-
-- `.gemini-delegation/hooks/` is the shared local implementation copied from
-  the source checkout.
-- `.claude/hooks/` contains Claude Code shims and guard hooks.
-- `.codex/hooks/` contains Codex shims for the same local backend.
-- `.agents/rules/delegation.md` teaches Antigravity not to recursively invoke
-  itself.
-
-### Expected Delegate Command
-
-Claude Code and Codex should delegate broad or high-output work with:
+Delegate to `agy` for: security audits, web/doc search, reading 3+ new files,
+recursive repo scans, or expected output > 500 lines. Run from the repo root:
 
 ```powershell
 & .claude/hooks/delegate_and_log.ps1 "<task>" "<context>" 10
+& .claude/hooks/delegate_and_log.ps1 "<task>" "<context>" 10 -Profile research
 ```
 
-Codex may also use:
+Set `DELEGATION_BACKEND=gemini-api` with a `GEMINI_API_KEY` from
+https://aistudio.google.com/apikey to delegate without an agy install.
 
-```powershell
-& .codex/hooks/delegate_and_log.ps1 "<task>" "<context>" 10
-```
-
-Use `-Profile research` for documentation lookup, web research, security
-audits, and broad multi-file analysis.
-
-### Always Delegate From Claude Code Or Codex
-
-- Commands expected to produce more than 500 lines of output
-- `npm ls`, `pip list`, `pip freeze`, and verbose dependency listings
-- `git log` beyond 5 commits or broad git history analysis
-- Recursive searches and broad multi-file analysis
-- Security audits and vulnerability scans
-- Documentation lookup or web research
-
-Validate delegated output before acting on it.
-
-When the current agent is Antigravity or `agy` itself, do the work directly.
-Do not recursively invoke `agy` from inside an Antigravity agent session.
-
-### Claude Code Subagents
-
-Do not use broad or exploratory Claude subagents for work that matches the
-delegation rules. Use `agy` instead unless the user explicitly requests a
-Claude subagent.
+When running as Antigravity or `agy`, do the work directly — do not recursively invoke `agy`.
 {AGENTS_MARKER_END}
 """
 
@@ -285,6 +249,28 @@ def copy_shared_hooks(project_dir: Path) -> Path:
     return dest_hooks
 
 
+_CLAUDE_COMMAND_DELEGATE = """\
+Delegate the following task to the agy (Antigravity) Gemini backend using the
+in-repo delegation script. Run from the repository root and report the full output:
+
+```powershell
+& .claude/hooks/delegate_and_log.ps1 "$ARGUMENTS" "/delegate" 10
+```
+
+Add `-Profile research` when the task involves web search, documentation
+lookup, security audits, or reading many files.
+"""
+
+
+def create_claude_command(claude_dir: Path) -> None:
+    """Write the /delegate convenience command for Claude Code."""
+    commands_dir = claude_dir / "commands"
+    commands_dir.mkdir(parents=True, exist_ok=True)
+    dest = commands_dir / "delegate.md"
+    _write_if_changed(dest, _CLAUDE_COMMAND_DELEGATE, backup_existing=False)
+    print(f"[OK] Created {dest}")
+
+
 def _proxy_ps1(script_name: str) -> str:
     return f"""[CmdletBinding()]
 param(
@@ -345,6 +331,7 @@ def create_tool_shims(project_dir: Path) -> None:
         except OSError:
             pass
         print(f"[OK] Created {tool_dir} shims")
+    create_claude_command(project_dir / ".claude")
 
 
 def create_claude_settings(claude_dir: Path) -> Path:
@@ -395,6 +382,55 @@ def create_claude_settings(claude_dir: Path) -> Path:
     return settings_path
 
 
+def revert_claude_settings(claude_dir: Path) -> bool:
+    """Strip delegation_guard PreToolUse entries from .claude/settings.json.
+
+    Returns True if the file was changed.  Does not touch any other keys.
+    """
+    settings_path = claude_dir / "settings.json"
+    if not settings_path.exists():
+        return False
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+
+    hooks = settings.get("hooks", {})
+    pre_tool_use = hooks.get("PreToolUse", [])
+    if not pre_tool_use:
+        return False
+
+    cleaned = []
+    for entry in pre_tool_use:
+        entry_hooks = [
+            hook
+            for hook in entry.get("hooks", [])
+            if "delegation_guard" not in hook.get("command", "")
+        ]
+        if entry_hooks:
+            copied = dict(entry)
+            copied["hooks"] = entry_hooks
+            cleaned.append(copied)
+
+    if cleaned == pre_tool_use:
+        return False  # nothing to do
+
+    if cleaned:
+        hooks["PreToolUse"] = cleaned
+    else:
+        hooks.pop("PreToolUse", None)
+
+    if not hooks:
+        settings.pop("hooks", None)
+    else:
+        settings["hooks"] = hooks
+
+    changed = _write_if_changed(settings_path, json.dumps(settings, indent=2) + "\n")
+    if changed:
+        print(f"[OK] Removed delegation_guard hooks from {settings_path}")
+    return changed
+
+
 def create_antigravity_rule(project_dir: Path) -> Path:
     rule_path = project_dir / ".agents" / "rules" / "delegation.md"
     _write_if_changed(rule_path, antigravity_rule(), backup_existing=False)
@@ -418,14 +454,25 @@ def install_agents(project_dir: Path) -> None:
         print(f"[OK] Installed bundled agent: {dest_dir}")
 
 
-def verify_install(target_dir: str) -> int:
+def verify_install(target_dir: str, *, preserve_claude_md: bool = False) -> int:
     project_dir = resolve_target(target_dir)
     missing = [relative for relative in MANAGED_FILES if not (project_dir / relative).exists()]
     if missing:
         raise InstallError("Delegation install is incomplete. Missing:\n- " + "\n- ".join(missing))
-    claude_bridge = (project_dir / "CLAUDE.md").read_text(encoding="utf-8").strip()
-    if claude_bridge != "@AGENTS.md":
-        raise InstallError("CLAUDE.md must contain exactly @AGENTS.md after migration.")
+
+    claude_md = project_dir / "CLAUDE.md"
+    if not preserve_claude_md:
+        claude_bridge = claude_md.read_text(encoding="utf-8").strip()
+        if claude_bridge != "@AGENTS.md":
+            raise InstallError("CLAUDE.md must contain exactly @AGENTS.md after migration.")
+    else:
+        if claude_md.exists() and claude_md.stat().st_size > 0:
+            first_line = claude_md.read_text(encoding="utf-8").splitlines()[0].strip()
+            if first_line != "@AGENTS.md":
+                raise InstallError(
+                    "With --preserve-claude-md, CLAUDE.md must begin with @AGENTS.md on line 1.\n"
+                    f"Found: {first_line!r}"
+                )
     agents_text = (project_dir / "AGENTS.md").read_text(encoding="utf-8")
     if AGENTS_MARKER_BEGIN not in agents_text or AGENTS_MARKER_END not in agents_text:
         raise InstallError("AGENTS.md is missing the managed delegation marker block.")
@@ -456,21 +503,30 @@ def verify_install(target_dir: str) -> int:
     return 0
 
 
-def install_hooks(scope: str = "local", target_dir: str = ".", create_target: bool = False) -> int:
+def install_hooks(
+    scope: str = "local",
+    target_dir: str = ".",
+    create_target: bool = False,
+    preserve_claude_md: bool = False,
+) -> int:
     if scope != "local":
         raise InstallError(
             "Global project mutation is intentionally unsupported.\n"
             "Install locally into each target repo with: install --target <path>."
         )
     project_dir = resolve_target(target_dir, create=create_target)
-    migrated = migrate_claude_instructions(project_dir)
+    if preserve_claude_md:
+        print("[INFO] --preserve-claude-md: skipping CLAUDE.md migration.")
+        migrated = ""
+    else:
+        migrated = migrate_claude_instructions(project_dir)
     ensure_agents_md(project_dir, migrated)
     copy_shared_hooks(project_dir)
     create_tool_shims(project_dir)
     create_claude_settings(project_dir / ".claude")
     create_antigravity_rule(project_dir)
     install_agents(project_dir)
-    verify_install(str(project_dir))
+    verify_install(str(project_dir), preserve_claude_md=preserve_claude_md)
     print(f"[SUCCESS] Installed local agy delegation into {project_dir}")
     return 0
 
@@ -533,20 +589,44 @@ def uninstall_hooks(scope: str = "local", target_dir: str = ".") -> int:
     failures: list[str] = []
 
     for relative in (
+        # shared implementation tree
         ".gemini-delegation",
+        # claude shims (new-style)
         ".claude/hooks/delegate.ps1",
         ".claude/hooks/delegate_and_log.ps1",
         ".claude/hooks/delegation_guard.ps1",
         ".claude/hooks/delegate.bat",
         ".claude/hooks/delegate",
+        # claude legacy direct-copies (old-style; safe no-op if absent)
+        ".claude/hooks/gemini_delegate.py",
+        ".claude/hooks/pre_delegate.py",
+        ".claude/hooks/post_delegate.py",
+        ".claude/hooks/analyze_metrics.py",
+        ".claude/hooks/delegation_guard.py",
+        # claude command
+        ".claude/commands/delegate.md",
+        # codex shims (new-style)
         ".codex/hooks/delegate.ps1",
         ".codex/hooks/delegate_and_log.ps1",
         ".codex/hooks/delegation_guard.ps1",
         ".codex/hooks/delegate.bat",
         ".codex/hooks/delegate",
+        # codex legacy direct-copies
+        ".codex/hooks/gemini_delegate.py",
+        ".codex/hooks/pre_delegate.py",
+        ".codex/hooks/post_delegate.py",
+        ".codex/hooks/analyze_metrics.py",
+        ".codex/hooks/delegation_guard.py",
+        # antigravity rule
         ".agents/rules/delegation.md",
     ):
         _remove_path(project_dir / relative, removed, failures)
+
+    try:
+        if revert_claude_settings(project_dir / ".claude"):
+            removed.append(str(project_dir / ".claude/settings.json (delegation_guard hooks removed)"))
+    except (OSError, InstallError) as exc:
+        failures.append(f".claude/settings.json revert: {exc}")
 
     try:
         if remove_agents_md_section(project_dir):

@@ -11,10 +11,13 @@ from gemini_delegation.installer import (  # noqa: E402
     AGENTS_MARKER_BEGIN,
     AGENTS_MARKER_END,
     InstallError,
+    agents_section,
+    create_claude_command,
     create_claude_settings,
     get_codex_dir,
     install_hooks,
     remove_agents_md_section,
+    revert_claude_settings,
     uninstall_hooks,
     verify_install,
 )
@@ -80,6 +83,184 @@ class TestTargetInstall(unittest.TestCase):
             report = project_dir / "temp" / "delegation-uninstall-latest.md"
             self.assertTrue(report.is_file())
             self.assertIn("Delegation Uninstall Report", report.read_text(encoding="utf-8"))
+
+
+class TestAgentsSection(unittest.TestCase):
+    def test_slim_agents_section_is_concise(self):
+        """The AGENTS.md managed block must be short — it's always-on context."""
+        content = agents_section()
+        inner_lines = [
+            line for line in content.splitlines()
+            if line.strip() not in {AGENTS_MARKER_BEGIN, AGENTS_MARKER_END}
+        ]
+        self.assertLess(len(inner_lines), 15, "agents_section grew too large; keep it slim")
+
+    def test_agents_section_contains_delegate_command(self):
+        content = agents_section()
+        self.assertIn("delegate_and_log.ps1", content)
+        self.assertIn("agy", content.lower())
+        self.assertIn(AGENTS_MARKER_BEGIN, content)
+        self.assertIn(AGENTS_MARKER_END, content)
+
+    def test_agents_section_mentions_gemini_api_fallback(self):
+        content = agents_section()
+        self.assertIn("DELEGATION_BACKEND=gemini-api", content)
+        self.assertIn("GEMINI_API_KEY", content)
+
+
+class TestClaudeCommand(unittest.TestCase):
+    def test_create_claude_command_writes_delegate_md(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            create_claude_command(claude_dir)
+            delegate_md = claude_dir / "commands" / "delegate.md"
+            self.assertTrue(delegate_md.is_file())
+            content = delegate_md.read_text(encoding="utf-8")
+            self.assertIn("delegate_and_log.ps1", content)
+            self.assertIn("$ARGUMENTS", content)
+
+    def test_install_creates_claude_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            install_hooks(target_dir=tmpdir)
+            delegate_md = Path(tmpdir) / ".claude" / "commands" / "delegate.md"
+            self.assertTrue(delegate_md.is_file())
+
+    def test_uninstall_removes_claude_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            install_hooks(target_dir=tmpdir)
+            uninstall_hooks(target_dir=tmpdir)
+            delegate_md = Path(tmpdir) / ".claude" / "commands" / "delegate.md"
+            self.assertFalse(delegate_md.exists())
+
+
+class TestRevertClaudeSettings(unittest.TestCase):
+    def test_revert_removes_delegation_guard_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+            settings_path = claude_dir / "settings.json"
+            settings_path.write_text(
+                json.dumps({
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [{"type": "command", "command": "pwsh -File .claude/hooks/delegation_guard.ps1"}],
+                            },
+                            {
+                                "matcher": "Bash",
+                                "hooks": [{"type": "command", "command": "echo keep"}],
+                            },
+                        ]
+                    },
+                    "theme": "dark",
+                }),
+                encoding="utf-8",
+            )
+
+            changed = revert_claude_settings(claude_dir)
+
+            self.assertTrue(changed)
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            commands = [
+                hook["command"]
+                for entry in settings["hooks"]["PreToolUse"]
+                for hook in entry["hooks"]
+            ]
+            self.assertIn("echo keep", commands)
+            self.assertFalse(any("delegation_guard" in c for c in commands))
+            self.assertEqual(settings["theme"], "dark")  # unrelated keys preserved
+
+    def test_revert_returns_false_when_nothing_to_revert(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+            (claude_dir / "settings.json").write_text(
+                json.dumps({"theme": "dark"}), encoding="utf-8"
+            )
+            self.assertFalse(revert_claude_settings(claude_dir))
+
+    def test_uninstall_reverts_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            install_hooks(target_dir=tmpdir)
+            settings_before = json.loads(
+                (Path(tmpdir) / ".claude" / "settings.json").read_text(encoding="utf-8")
+            )
+            guard_cmds = [
+                hook["command"]
+                for entry in settings_before.get("hooks", {}).get("PreToolUse", [])
+                for hook in entry.get("hooks", [])
+                if "delegation_guard" in hook.get("command", "")
+            ]
+            self.assertTrue(guard_cmds, "install should have added delegation_guard hooks")
+
+            uninstall_hooks(target_dir=tmpdir)
+
+            settings_after = json.loads(
+                (Path(tmpdir) / ".claude" / "settings.json").read_text(encoding="utf-8")
+            )
+            remaining = [
+                hook["command"]
+                for entry in settings_after.get("hooks", {}).get("PreToolUse", [])
+                for hook in entry.get("hooks", [])
+                if "delegation_guard" in hook.get("command", "")
+            ]
+            self.assertFalse(remaining)
+
+
+class TestPreserveClaudeMd(unittest.TestCase):
+    def test_install_preserves_hand_authored_claude_md(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            hand_authored = "@AGENTS.md\n\n# Claude-specific rules\nDo not rewrite this.\n"
+            (project_dir / "CLAUDE.md").write_text(hand_authored, encoding="utf-8")
+
+            result = install_hooks(target_dir=tmpdir, preserve_claude_md=True)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                (project_dir / "CLAUDE.md").read_text(encoding="utf-8"),
+                hand_authored,
+                "CLAUDE.md must not be modified with --preserve-claude-md",
+            )
+
+    def test_verify_accepts_multi_line_claude_md_starting_with_agents_import(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            install_hooks(target_dir=tmpdir, preserve_claude_md=True)
+            # verify_install with preserve mode should not raise
+            verify_install(tmpdir, preserve_claude_md=True)
+
+
+class TestUninstallLegacyHooks(unittest.TestCase):
+    def test_uninstall_removes_legacy_direct_copy_hooks(self):
+        """Uninstall should remove old-style direct-copy .py hooks too."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            install_hooks(target_dir=tmpdir)
+            # Simulate legacy files dropped directly into .claude/hooks/
+            for name in ("gemini_delegate.py", "pre_delegate.py", "post_delegate.py",
+                         "analyze_metrics.py", "delegation_guard.py"):
+                (project_dir / ".claude" / "hooks" / name).write_text("# legacy\n", encoding="utf-8")
+
+            uninstall_hooks(target_dir=tmpdir)
+
+            for name in ("gemini_delegate.py", "pre_delegate.py", "post_delegate.py",
+                         "analyze_metrics.py", "delegation_guard.py"):
+                self.assertFalse((project_dir / ".claude" / "hooks" / name).exists(),
+                                 f"legacy hook {name} should have been removed")
+
+    def test_uninstall_preserves_unrelated_hooks(self):
+        """Uninstall must not touch hooks that are not delegation-managed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            install_hooks(target_dir=tmpdir)
+            keep_hook = project_dir / ".claude" / "hooks" / "mempalace-hook.ps1"
+            keep_hook.write_text("# unrelated hook\n", encoding="utf-8")
+
+            uninstall_hooks(target_dir=tmpdir)
+
+            self.assertTrue(keep_hook.exists(), "unrelated hook must survive uninstall")
 
 
 class TestManagedDocuments(unittest.TestCase):

@@ -56,6 +56,16 @@ KNOWN_AGY_MODELS = [
     "GPT-OSS 120B (Medium)",
 ]
 
+# Backend: direct calls to the Gemini API using a free aistudio.google.com key.
+# Model IDs here are API identifiers, not agy's display names.
+DEFAULT_API_MODELS = ["gemini-2.5-flash"]
+RESEARCH_API_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"]
+
+# Adding another backend (e.g. openai, anthropic) means: one constant block
+# like the above, one call_<backend>() function shaped like call_gemini_api,
+# one branch in main(), and a new entry in this tuple.
+BACKENDS = ("agy", "gemini-api")
+
 CAPACITY_PATTERNS = (
     "exhausted your capacity",
     "no capacity available",
@@ -63,6 +73,7 @@ CAPACITY_PATTERNS = (
     "ratelimitexceeded",
     "rate limit",
     "status 429",
+    "resource_exhausted",
 )
 
 
@@ -207,6 +218,75 @@ def resolve_agy_command() -> str:
     if os.name == "nt":
         return shutil.which("agy.exe") or shutil.which("agy") or "agy.exe"
     return shutil.which("agy") or "agy"
+
+
+def resolve_backend(args: argparse.Namespace) -> str:
+    """Pick the delegation backend: --backend flag > DELEGATION_BACKEND env > agy."""
+    backend = args.backend or os.environ.get("DELEGATION_BACKEND") or "agy"
+    return backend.strip().lower()
+
+
+def _extract_gemini_text(payload: dict) -> str:
+    """Pull the generated text out of a Gemini generateContent response."""
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(part.get("text", "") for part in parts)
+
+
+def call_gemini_api(model: str, prompt: str, timeout: int) -> subprocess.CompletedProcess:
+    """Call the Gemini API directly with an aistudio.google.com API key.
+
+    Returns a subprocess.CompletedProcess-shaped result so it slots into the
+    same fallback/cooldown loop used for agy (see run_with_fallback).
+    """
+    import socket
+    import urllib.error
+    import urllib.request
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return subprocess.CompletedProcess(
+            args=["gemini-api", model],
+            returncode=2,
+            stdout="",
+            stderr=(
+                "GEMINI_API_KEY is not set. Get a free key at "
+                "https://aistudio.google.com/apikey and set GEMINI_API_KEY."
+            ),
+        )
+
+    url = "https://generativelanguage.googleapis.com/v1beta/models/{0}:generateContent".format(model)
+    body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout if timeout > 0 else None) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        return subprocess.CompletedProcess(
+            args=["gemini-api", model],
+            returncode=exc.code,
+            stdout="",
+            stderr=error_body or str(exc),
+        )
+    except urllib.error.URLError as exc:
+        return subprocess.CompletedProcess(
+            args=["gemini-api", model], returncode=1, stdout="", stderr=str(exc.reason),
+        )
+    except socket.timeout:
+        raise subprocess.TimeoutExpired(cmd=["gemini-api", model], timeout=timeout)
+
+    return subprocess.CompletedProcess(
+        args=["gemini-api", model], returncode=0, stdout=_extract_gemini_text(payload), stderr="",
+    )
 
 
 _ANSI_RE = re.compile(
@@ -356,6 +436,12 @@ def parse_args() -> argparse.Namespace:
         help="Model order profile. Research uses Pro before Flash.",
     )
     parser.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        default=None,
+        help="Delegation backend. Defaults to $DELEGATION_BACKEND or 'agy'.",
+    )
+    parser.add_argument(
         "--cooldown-seconds",
         type=int,
         default=300,
@@ -395,39 +481,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    
-    # Increase idle timeout for research profile if not explicitly overridden
-    if args.profile == "research" and args.idle_timeout_seconds == 60:
-        args.idle_timeout_seconds = 120
-    
-    prompt = args.prompt if args.prompt is not None else sys.stdin.read()
-    prompt = prompt.strip()
-    if not prompt:
-        print("No prompt provided.", file=sys.stderr)
-        return 2
+def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, attempt) -> int:
+    """Try `models` in order via `attempt(model)`, applying capacity cooldowns.
 
-    model_order = args.models
-    if model_order is None:
-        model_order = ",".join(RESEARCH_MODELS if args.profile == "research" else DEFAULT_MODELS)
-
-    models = parse_model_order(model_order)
-    if not models:
-        print("No models configured.", file=sys.stderr)
-        return 2
-
-    errors = model_name_errors(models)
-    if errors:
-        for error in errors:
-            print(error, file=sys.stderr)
-        return 2
-
-    claude_dir = find_agent_dir(Path.cwd())
-    state_path = Path(args.state_file) if args.state_file else claude_dir / "metrics" / "agy_model_state.json"
+    `attempt(model)` returns a subprocess.CompletedProcess-shaped result and
+    may raise subprocess.TimeoutExpired. Shared by every backend (agy,
+    gemini-api, ...) so they all get the same fallback/cooldown/state-file
+    behavior for free.
+    """
     state = {"cooldowns": {}} if args.no_state else load_state(state_path)
     now = time.time()
-    command = resolve_agy_command()
     skipped = []
     last_result = None
     last_model = None
@@ -440,13 +503,9 @@ def main() -> int:
             skipped.append(model)
             continue
 
-        print("Trying agy model: {0}".format(model), file=sys.stderr)
+        print("Trying model: {0}".format(model), file=sys.stderr)
         try:
-            result = run_agy(
-                command, model, prompt,
-                timeout=args.timeout_seconds,
-                idle_timeout=args.idle_timeout_seconds,
-            )
+            result = attempt(model)
         except subprocess.TimeoutExpired as exc:
             last_model = model
             last_result = None
@@ -475,7 +534,7 @@ def main() -> int:
 
         if result.returncode == 0:
             if args.show_model:
-                print("agy model used: {0}".format(model), file=sys.stderr)
+                print("Model used: {0}".format(model), file=sys.stderr)
             if output:
                 if not args.no_save:
                     _try_save_response(output, model)
@@ -504,7 +563,7 @@ def main() -> int:
     if not args.no_state:
         save_state(state_path, state)
 
-    print("All agy models are currently capacity-limited or unavailable.", file=sys.stderr)
+    print("All models are currently capacity-limited or unavailable.", file=sys.stderr)
     if skipped:
         print("Skipped due to cooldown: {0}".format(", ".join(skipped)), file=sys.stderr)
     if last_result is not None:
@@ -517,6 +576,90 @@ def main() -> int:
     if last_model:
         print("Last attempted model: {0}".format(last_model), file=sys.stderr)
     return 1
+
+
+def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> int:
+    """Delegate via the Gemini API directly, using GEMINI_API_KEY."""
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        print(
+            "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey "
+            "and set GEMINI_API_KEY (or GOOGLE_API_KEY).",
+            file=sys.stderr,
+        )
+        return 2
+
+    model_order = args.models or os.environ.get("GEMINI_API_MODELS")
+    if model_order is None:
+        model_order = ",".join(RESEARCH_API_MODELS if args.profile == "research" else DEFAULT_API_MODELS)
+
+    models = parse_model_order(model_order)
+    if not models:
+        print("No models configured.", file=sys.stderr)
+        return 2
+
+    state_path = (
+        Path(args.state_file) if args.state_file else claude_dir / "metrics" / "gemini_api_model_state.json"
+    )
+
+    def attempt(model: str) -> subprocess.CompletedProcess:
+        return call_gemini_api(model, prompt, timeout=args.timeout_seconds)
+
+    return run_with_fallback(models, state_path, args, attempt)
+
+
+def main() -> int:
+    args = parse_args()
+
+    backend = resolve_backend(args)
+    if backend not in BACKENDS:
+        print(
+            "Unknown backend {0!r}. Choose one of: {1}".format(backend, ", ".join(BACKENDS)),
+            file=sys.stderr,
+        )
+        return 2
+
+    # Increase idle timeout for research profile if not explicitly overridden
+    if args.profile == "research" and args.idle_timeout_seconds == 60:
+        args.idle_timeout_seconds = 120
+
+    prompt = args.prompt if args.prompt is not None else sys.stdin.read()
+    prompt = prompt.strip()
+    if not prompt:
+        print("No prompt provided.", file=sys.stderr)
+        return 2
+
+    claude_dir = find_agent_dir(Path.cwd())
+
+    if backend == "gemini-api":
+        return run_api_backend(prompt, args, claude_dir)
+
+    # backend == "agy"
+    model_order = args.models
+    if model_order is None:
+        model_order = ",".join(RESEARCH_MODELS if args.profile == "research" else DEFAULT_MODELS)
+
+    models = parse_model_order(model_order)
+    if not models:
+        print("No models configured.", file=sys.stderr)
+        return 2
+
+    errors = model_name_errors(models)
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 2
+
+    state_path = Path(args.state_file) if args.state_file else claude_dir / "metrics" / "agy_model_state.json"
+    command = resolve_agy_command()
+
+    def attempt(model: str) -> subprocess.CompletedProcess:
+        return run_agy(
+            command, model, prompt,
+            timeout=args.timeout_seconds,
+            idle_timeout=args.idle_timeout_seconds,
+        )
+
+    return run_with_fallback(models, state_path, args, attempt)
 
 
 if __name__ == "__main__":

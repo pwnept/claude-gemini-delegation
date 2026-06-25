@@ -25,7 +25,7 @@ class TestCLI(unittest.TestCase):
         code = cli.main(["install", "--target", "C:\\repo"])
 
         self.assertEqual(code, 0)
-        mock_install.assert_called_once_with(target_dir="C:\\repo", create_target=False)
+        mock_install.assert_called_once_with(target_dir="C:\\repo", create_target=False, preserve_claude_md=False)
 
     @patch("gemini_delegation.installer.verify_install")
     def test_verify_command_forwards_target(self, mock_verify):

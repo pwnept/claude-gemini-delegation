@@ -1,8 +1,10 @@
 # Claude Gemini Delegation
 
-Local-first delegation hooks for Claude Code and Codex. The backend is `agy`
-(Antigravity CLI), which can route broad, high-output, or research-heavy work
-away from the main Claude/Codex session while preserving a concise handoff.
+Local-first delegation hooks for Claude Code and Codex. The default backend is
+`agy` (Antigravity CLI), which can route broad, high-output, or research-heavy
+work away from the main Claude/Codex session while preserving a concise
+handoff. A direct Gemini API backend is also available — see
+[Choosing A Backend](#choosing-a-backend).
 
 ## Intended Workflow
 
@@ -36,8 +38,11 @@ delegation instructions and hook files. External executables such as Python and
 
 - PowerShell 7+ preferred for the installer and wrappers.
 - Python 3.8+.
-- Antigravity CLI `agy` installed and signed in.
-- Windows only: `pywinpty` is recommended for reliable `agy.exe` output capture:
+- For the default `agy` backend: Antigravity CLI `agy` installed and signed in.
+- For the `gemini-api` backend instead: a free API key from
+  https://aistudio.google.com/apikey, no other install required.
+- Windows only, `agy` backend: `pywinpty` is recommended for reliable
+  `agy.exe` output capture:
 
 ```powershell
 py -3 -m pip install --user pywinpty
@@ -136,6 +141,37 @@ The lower-level two-step flow is:
 $prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis" 5
 $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 ```
+
+## Choosing A Backend
+
+Two backends are supported. `agy` is the default, so existing installs and
+the examples above keep working unchanged.
+
+| Backend | Selected by | Needs |
+|---|---|---|
+| `agy` (default) | nothing, or `--backend agy` / `DELEGATION_BACKEND=agy` | Antigravity CLI installed and signed in |
+| `gemini-api` | `--backend gemini-api` or `DELEGATION_BACKEND=gemini-api` | a free API key from https://aistudio.google.com/apikey |
+
+To use the direct API backend:
+
+```powershell
+$env:DELEGATION_BACKEND = "gemini-api"
+$env:GEMINI_API_KEY = "<key from aistudio.google.com>"
+& .claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+```
+
+It calls `https://generativelanguage.googleapis.com` directly over
+`urllib` — no extra dependency, no GUI/ConPTY capture, works headless. Model
+fallback order defaults to `gemini-2.5-flash` (or `gemini-2.5-pro` first for
+`-Profile research`); override with `--models` or `GEMINI_API_MODELS`.
+Capacity errors (HTTP 429 / `RESOURCE_EXHAUSTED`) trigger the same per-model
+cooldown and fallback behavior as the `agy` backend, just tracked in a
+separate state file (`gemini_api_model_state.json`).
+
+Adding another backend (OpenAI, Anthropic, ...) is one `call_<backend>()`
+function shaped like `call_gemini_api`, one branch in `gemini_delegate.py:main()`,
+and an entry in the `BACKENDS` tuple — the fallback/cooldown loop
+(`run_with_fallback`) is shared by all backends.
 
 ## When Agents Should Delegate
 
