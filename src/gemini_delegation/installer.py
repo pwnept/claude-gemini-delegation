@@ -400,12 +400,18 @@ def revert_claude_settings(claude_dir: Path) -> bool:
     if not pre_tool_use:
         return False
 
+    def _is_delegation_guard(hook: dict) -> bool:
+        if "delegation_guard" in hook.get("command", ""):
+            return True
+        # Old-style: command=powershell.exe, guard path in args list
+        return any("delegation_guard" in str(arg) for arg in (hook.get("args") or []))
+
     cleaned = []
     for entry in pre_tool_use:
         entry_hooks = [
             hook
             for hook in entry.get("hooks", [])
-            if "delegation_guard" not in hook.get("command", "")
+            if not _is_delegation_guard(hook)
         ]
         if entry_hooks:
             copied = dict(entry)
