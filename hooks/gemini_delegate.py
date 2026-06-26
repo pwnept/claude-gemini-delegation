@@ -33,18 +33,12 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-DEFAULT_MODELS = [
-    "Gemini 3.5 Flash (Medium)",
-    "Gemini 3.5 Flash (High)",
-    "Gemini 3.5 Flash (Low)",
-]
+# All Gemini models share a single quota pool in agy, so tier variants
+# (Medium/High/Low) offer no real fallback benefit. One model per profile.
+DEFAULT_MODELS = ["Gemini 3.5 Flash (High)"]
+RESEARCH_MODELS = ["Gemini 3.1 Pro (High)"]
 
-RESEARCH_MODELS = [
-    "Gemini 3.1 Pro (Low)",
-    "Gemini 3.1 Pro (High)",
-    "Gemini 3.5 Flash (Medium)",
-]
-
+# Keep the full known-model list for --models overrides and prefix validation.
 KNOWN_AGY_MODELS = [
     "Gemini 3.5 Flash (Medium)",
     "Gemini 3.5 Flash (High)",
@@ -56,15 +50,47 @@ KNOWN_AGY_MODELS = [
     "GPT-OSS 120B (Medium)",
 ]
 
-# Backend: direct calls to the Gemini API using a free aistudio.google.com key.
-# Model IDs here are API identifiers, not agy's display names.
-DEFAULT_API_MODELS = ["gemini-2.5-flash"]
-RESEARCH_API_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"]
+# Backend: Gemini CLI (npm install -g @google/gemini-cli).
+# Auth via GEMINI_API_KEY in $PROFILE (free aistudio.google.com key).
+# Model IDs must be accepted by the CLI's --model flag (not all API model IDs
+# are in the CLI's built-in list). Test with fresh-quota models first.
+DEFAULT_CLI_MODELS = [
+    "gemini-3.5-flash",       # primary; 20 RPD limit — 429s cascade to next
+    "gemini-3-flash-preview", # mandatory fallback, same tier
+    "gemini-2.5-flash",       # independent quota
+    "gemini-3.1-flash-lite",  # 500 RPD limit — largest headroom, lite warning fires here
+    "gemini-2.5-flash-lite",  # 20 RPD limit — lite warning fires here
+]
+RESEARCH_CLI_MODELS = DEFAULT_CLI_MODELS
 
-# Adding another backend (e.g. openai, anthropic) means: one constant block
-# like the above, one call_<backend>() function shaped like call_gemini_api,
-# one branch in main(), and a new entry in this tuple.
-BACKENDS = ("agy", "gemini-api")
+# Backend: direct Gemini REST API via urllib (no npm, no agy — stdlib only).
+# Auth via GEMINI_API_KEY. Each model has an independent daily/RPM quota,
+# so a 5-model cascade absorbs a lot of 429s before the pipeline gives up.
+# Lite models are last-resort: acceptable for file search / grounding tasks
+# (grounding RPD is generous: 1500 for default, Gemini 2.5, and Gemini 2).
+DEFAULT_API_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3-flash",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite",
+]
+RESEARCH_API_MODELS = DEFAULT_API_MODELS
+
+# Scout profile: Gemma 4 models for read-heavy, low-reasoning tasks.
+# 31B full model for quality; 26B MoE (4B active params) as faster fallback.
+# Both have 1.5K RPD and unlimited TPM — absorbs codebase scoping, log parsing,
+# dependency scanning, and test-case discovery without touching Flash quota.
+SCOUT_CLI_MODELS = ["gemma-4-31b-it", "gemma-4-26b-a4b-it"]
+SCOUT_API_MODELS = ["gemma-4-31b-it", "gemma-4-26b-a4b-it"]
+
+# Lite models print a warning so the caller can decide whether to trust the output.
+LITE_MODELS = {"gemini-3.1-flash-lite", "gemini-2.5-flash-lite"}
+
+# Adding another backend means: one constant block like the above,
+# one run_<backend>() + run_<backend>_backend() pair, one branch in main(),
+# and a new entry in this tuple.
+BACKENDS = ("agy", "gemini-cli", "gemini-api")
 
 CAPACITY_PATTERNS = (
     "exhausted your capacity",
@@ -74,6 +100,11 @@ CAPACITY_PATTERNS = (
     "rate limit",
     "status 429",
     "resource_exhausted",
+    "service unavailable",    # gemini-cli 503 text
+    "unavailable",            # direct API: "503 UNAVAILABLE: ..." status field
+    "currently experiencing", # gemini-cli "high demand" body text
+    "terminalquotaerror",     # gemini-cli daily quota class
+    "exhausted your daily",   # gemini-cli daily quota message
 )
 
 
@@ -226,67 +257,174 @@ def resolve_backend(args: argparse.Namespace) -> str:
     return backend.strip().lower()
 
 
-def _extract_gemini_text(payload: dict) -> str:
-    """Pull the generated text out of a Gemini generateContent response."""
-    candidates = payload.get("candidates") or []
-    if not candidates:
+def run_gemini_cli(model: str, prompt: str, timeout: int) -> subprocess.CompletedProcess:
+    """Run gemini-cli non-interactively, killing it immediately on capacity errors.
+
+    Streams stderr line-by-line in a background thread. The moment a capacity
+    pattern appears (429, 503, quota exhausted) the process tree is killed so
+    gemini-cli's own internal retry loop never fires a second API request.
+    On Windows, taskkill /F /T kills the cmd.exe shell + Node.js child together.
+    """
+    import threading
+
+    command = shutil.which("gemini") or "gemini"
+    cmd = [command, "--model", model, "--prompt", prompt, "--skip-trust", "--yolo"]
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=(os.name == "nt"),
+    )
+
+    stdout_buf = []
+    stderr_buf = []
+
+    def _kill_tree():
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+            )
+        else:
+            proc.kill()
+
+    def read_stdout():
+        stdout_buf.append(proc.stdout.read())
+
+    def watch_stderr():
+        for line in proc.stderr:
+            stderr_buf.append(line)
+            if capacity_limited(line):
+                _kill_tree()
+                proc.stderr.read()  # drain so the pipe does not block
+                return
+        rest = proc.stderr.read()
+        if rest:
+            stderr_buf.append(rest)
+
+    t_out = threading.Thread(target=read_stdout, daemon=True)
+    t_err = threading.Thread(target=watch_stderr, daemon=True)
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout if timeout > 0 else None)
+    except subprocess.TimeoutExpired:
+        _kill_tree()
+        proc.wait()
+
+    t_out.join(timeout=5)
+    t_err.join(timeout=2)
+
+    return subprocess.CompletedProcess(
+        args=cmd,
+        returncode=proc.returncode,
+        stdout="".join(filter(None, stdout_buf)),
+        stderr="".join(stderr_buf),
+    )
+
+
+def _extract_gemini_text(data: dict) -> str:
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
         return ""
-    parts = (candidates[0].get("content") or {}).get("parts") or []
-    return "".join(part.get("text", "") for part in parts)
 
 
 def call_gemini_api(model: str, prompt: str, timeout: int) -> subprocess.CompletedProcess:
-    """Call the Gemini API directly with an aistudio.google.com API key.
+    """POST to the Gemini REST API using only stdlib urllib.
 
-    Returns a subprocess.CompletedProcess-shaped result so it slots into the
-    same fallback/cooldown loop used for agy (see run_with_fallback).
+    Returns a CompletedProcess-shaped value so run_with_fallback can handle it
+    the same way as every other backend. 429 error bodies contain
+    "RESOURCE_EXHAUSTED" which CAPACITY_PATTERNS already matches.
     """
-    import socket
     import urllib.error
     import urllib.request
 
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         return subprocess.CompletedProcess(
             args=["gemini-api", model],
-            returncode=2,
+            returncode=1,
             stdout="",
-            stderr=(
-                "GEMINI_API_KEY is not set. Get a free key at "
-                "https://aistudio.google.com/apikey and set GEMINI_API_KEY."
-            ),
+            stderr="GEMINI_API_KEY not set. Add to $PROFILE: $env:GEMINI_API_KEY = 'your-key'",
         )
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/{0}:generateContent".format(model)
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        + model
+        + ":generateContent?key="
+        + api_key
+    )
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout if timeout > 0 else None) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        with urllib.request.urlopen(req, timeout=timeout if timeout > 0 else None) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        text = _extract_gemini_text(data)
         return subprocess.CompletedProcess(
             args=["gemini-api", model],
-            returncode=exc.code,
-            stdout="",
-            stderr=error_body or str(exc),
+            returncode=0 if text else 1,
+            stdout=text,
+            stderr="" if text else "Empty response from API",
         )
-    except urllib.error.URLError as exc:
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        try:
+            err = json.loads(raw.decode("utf-8"))
+            msg = err.get("error", {}).get("message", raw.decode("utf-8", errors="replace"))
+            status = err.get("error", {}).get("status", "")
+            stderr = "{0} {1}: {2}".format(exc.code, status, msg)
+        except (ValueError, KeyError):
+            stderr = "{0}: {1}".format(exc.code, raw.decode("utf-8", errors="replace"))
         return subprocess.CompletedProcess(
-            args=["gemini-api", model], returncode=1, stdout="", stderr=str(exc.reason),
+            args=["gemini-api", model], returncode=1, stdout="", stderr=stderr
         )
-    except socket.timeout:
-        raise subprocess.TimeoutExpired(cmd=["gemini-api", model], timeout=timeout)
+    except Exception as exc:
+        return subprocess.CompletedProcess(
+            args=["gemini-api", model], returncode=1, stdout="", stderr=str(exc)
+        )
 
-    return subprocess.CompletedProcess(
-        args=["gemini-api", model], returncode=0, stdout=_extract_gemini_text(payload), stderr="",
+
+def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> int:
+    """Delegate via direct Gemini REST API (stdlib urllib, no extra installs)."""
+    model_order = args.models or os.environ.get("GEMINI_API_MODELS")
+    if model_order is None:
+        if args.profile == "research":
+            model_order = ",".join(RESEARCH_API_MODELS)
+        elif args.profile == "scout":
+            model_order = ",".join(SCOUT_API_MODELS)
+        else:
+            model_order = ",".join(DEFAULT_API_MODELS)
+    models = parse_model_order(model_order)
+    if not models:
+        print("No models configured.", file=sys.stderr)
+        return 2
+
+    state_path = (
+        Path(args.state_file) if args.state_file
+        else claude_dir / "metrics" / "gemini_api_model_state.json"
     )
+
+    def attempt(model: str) -> subprocess.CompletedProcess:
+        if model in LITE_MODELS:
+            print(
+                "[gemini-api] Lite model {0} in use — suitable for file search / grounding "
+                "tasks (grounding RPD is generous). Flag results for review if used for "
+                "reasoning or code generation.".format(model),
+                file=sys.stderr,
+            )
+        return call_gemini_api(model, prompt, timeout=args.timeout_seconds)
+
+    return run_with_fallback(models, state_path, args, attempt)
 
 
 _ANSI_RE = re.compile(
@@ -431,9 +569,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--profile",
-        choices=("default", "research"),
+        choices=("default", "research", "scout"),
         default="default",
-        help="Model order profile. Research uses Pro before Flash.",
+        help="Model order profile. Research uses Pro; scout uses Gemma 4 for read-heavy tasks.",
     )
     parser.add_argument(
         "--backend",
@@ -461,7 +599,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--state-file",
-        help="Override state file path. Defaults to .claude/metrics/agy_model_state.json.",
+        help="Override state file path. Defaults to .gemini-delegation/metrics/agy_model_state.json.",
     )
     parser.add_argument(
         "--no-state",
@@ -532,13 +670,15 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
         error = result.stderr or ""
         combined = output + "\n" + error
 
-        if result.returncode == 0:
+        # Exit 9 on Windows = Node.js libuv cleanup crash after response is captured.
+        # Treat as success if stdout has content and stderr has no capacity signal.
+        node_crash = (result.returncode == 9 and output and not capacity_limited(combined))
+        if (result.returncode == 0 or node_crash) and output:
             if args.show_model:
                 print("Model used: {0}".format(model), file=sys.stderr)
-            if output:
-                if not args.no_save:
-                    _try_save_response(output, model)
-                sys.stdout.write(output)
+            if not args.no_save:
+                _try_save_response(output, model)
+            sys.stdout.write(output)
             if not args.no_state:
                 state.setdefault("cooldowns", {}).pop(model, None)
                 save_state(state_path, state)
@@ -578,19 +718,16 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
     return 1
 
 
-def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> int:
-    """Delegate via the Gemini API directly, using GEMINI_API_KEY."""
-    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
-        print(
-            "GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/apikey "
-            "and set GEMINI_API_KEY (or GOOGLE_API_KEY).",
-            file=sys.stderr,
-        )
-        return 2
-
-    model_order = args.models or os.environ.get("GEMINI_API_MODELS")
+def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> int:
+    """Delegate via gemini-cli (npm install -g @google/gemini-cli)."""
+    model_order = args.models or os.environ.get("GEMINI_CLI_MODELS")
     if model_order is None:
-        model_order = ",".join(RESEARCH_API_MODELS if args.profile == "research" else DEFAULT_API_MODELS)
+        if args.profile == "research":
+            model_order = ",".join(RESEARCH_CLI_MODELS)
+        elif args.profile == "scout":
+            model_order = ",".join(SCOUT_CLI_MODELS)
+        else:
+            model_order = ",".join(DEFAULT_CLI_MODELS)
 
     models = parse_model_order(model_order)
     if not models:
@@ -598,11 +735,18 @@ def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
         return 2
 
     state_path = (
-        Path(args.state_file) if args.state_file else claude_dir / "metrics" / "gemini_api_model_state.json"
+        Path(args.state_file) if args.state_file else claude_dir / "metrics" / "gemini_cli_model_state.json"
     )
 
     def attempt(model: str) -> subprocess.CompletedProcess:
-        return call_gemini_api(model, prompt, timeout=args.timeout_seconds)
+        if model in LITE_MODELS:
+            print(
+                "[gemini-cli] Lite model {0} in use — suitable for file search / grounding "
+                "tasks (grounding RPD is generous). Flag results for review if used for "
+                "reasoning or code generation.".format(model),
+                file=sys.stderr,
+            )
+        return run_gemini_cli(model, prompt, timeout=args.timeout_seconds)
 
     return run_with_fallback(models, state_path, args, attempt)
 
@@ -621,6 +765,8 @@ def main() -> int:
     # Increase idle timeout for research profile if not explicitly overridden
     if args.profile == "research" and args.idle_timeout_seconds == 60:
         args.idle_timeout_seconds = 120
+    if args.profile == "scout" and args.idle_timeout_seconds == 60:
+        args.idle_timeout_seconds = 90
 
     prompt = args.prompt if args.prompt is not None else sys.stdin.read()
     prompt = prompt.strip()
@@ -630,6 +776,9 @@ def main() -> int:
 
     claude_dir = find_agent_dir(Path.cwd())
 
+    if backend == "gemini-cli":
+        return run_cli_backend(prompt, args, claude_dir)
+
     if backend == "gemini-api":
         return run_api_backend(prompt, args, claude_dir)
 
@@ -637,6 +786,7 @@ def main() -> int:
     model_order = args.models
     if model_order is None:
         model_order = ",".join(RESEARCH_MODELS if args.profile == "research" else DEFAULT_MODELS)
+        # scout profile has no agy Gemma models; fall through to default Flash
 
     models = parse_model_order(model_order)
     if not models:

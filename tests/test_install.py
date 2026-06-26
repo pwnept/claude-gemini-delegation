@@ -105,9 +105,10 @@ class TestAgentsSection(unittest.TestCase):
         self.assertIn(AGENTS_MARKER_BEGIN, content)
         self.assertIn(AGENTS_MARKER_END, content)
 
-    def test_agents_section_mentions_gemini_api_fallback(self):
+    def test_agents_section_mentions_fallback_backends(self):
         content = agents_section()
         self.assertIn("DELEGATION_BACKEND=gemini-api", content)
+        self.assertIn("DELEGATION_BACKEND=gemini-cli", content)
         self.assertIn("GEMINI_API_KEY", content)
 
 

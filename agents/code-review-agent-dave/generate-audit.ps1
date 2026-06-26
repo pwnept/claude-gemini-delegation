@@ -38,12 +38,12 @@ MANDATORY HEADLESS RULES:
 6. EXIT: Once the report is saved, your task is complete.
 "@
 
-$Pipeline = Join-Path $ProjectRoot ".claude\hooks\delegate_and_log.ps1"
+$Pipeline = Join-Path $ProjectRoot ".gemini-delegation\hooks\delegate_and_log.ps1"
 if (-not (Test-Path -LiteralPath $Pipeline)) {
     $Pipeline = Join-Path $ProjectRoot "hooks\delegate_and_log.ps1"
 }
 if (-not (Test-Path -LiteralPath $Pipeline)) {
-    throw "Delegation pipeline not found. Run setup.py or install-delegation.ps1 first."
+    throw "Delegation pipeline not found. Run install-delegation.ps1 install --target <repo> first."
 }
 
 & $Pipeline $Prompt "Dave headless code audit" 0 -Profile research

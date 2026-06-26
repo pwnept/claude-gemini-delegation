@@ -34,7 +34,16 @@ class TestCLI(unittest.TestCase):
         code = cli.main(["verify", "--target", "/tmp/repo"])
 
         self.assertEqual(code, 0)
-        mock_verify.assert_called_once_with(target_dir="/tmp/repo")
+        mock_verify.assert_called_once_with(target_dir="/tmp/repo", preserve_claude_md=False)
+
+    @patch("gemini_delegation.installer.verify_install")
+    def test_verify_command_forwards_preserve_claude_md(self, mock_verify):
+        mock_verify.return_value = 0
+
+        code = cli.main(["verify", "--target", "/tmp/repo", "--preserve-claude-md"])
+
+        self.assertEqual(code, 0)
+        mock_verify.assert_called_once_with(target_dir="/tmp/repo", preserve_claude_md=True)
 
     @patch("sys.stderr", new_callable=StringIO)
     def test_installer_error_is_actionable(self, stderr):

@@ -188,7 +188,7 @@ def main():
     daily_count = check_daily_usage(metrics_dir)
     if daily_count >= 20:
         print(f"\n💡 TIP: You've made {daily_count} delegations today.")
-        print("   Run 'python3 .claude/hooks/analyze_metrics.py' to see optimization opportunities")
+        print("   Run 'python3 .gemini-delegation/hooks/analyze_metrics.py' to see optimization opportunities")
     
     # Exit with appropriate code
     sys.exit(0 if is_valid else 1)

@@ -5,17 +5,6 @@ import sys
 import traceback
 
 
-def run_delegation(args, stdin_content: str) -> int:
-    from .runner import execute_pipeline
-
-    return execute_pipeline(
-        task=stdin_content,
-        context=args.context,
-        max_lines=args.max_lines,
-        profile=args.profile,
-    )
-
-
 def install(args) -> int:
     from .installer import install_hooks
 
@@ -35,23 +24,20 @@ def uninstall(args) -> int:
 def verify(args) -> int:
     from .installer import verify_install
 
-    return verify_install(target_dir=args.target)
+    return verify_install(
+        target_dir=args.target,
+        preserve_claude_md=getattr(args, "preserve_claude_md", False),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gemini-delegate",
-        description="Install and run local agy delegation hooks for Claude Code and Codex.",
+        description="Install local agy delegation hooks for Claude Code and Codex.",
     )
     subparsers = parser.add_subparsers(dest="command")
     help_parser = subparsers.add_parser("help", help="Show this help text")
     help_parser.set_defaults(handler=lambda args: parser.print_help() or 0)
-
-    run_parser = subparsers.add_parser("run", help="Run delegation; reads the task from stdin")
-    run_parser.add_argument("--context", default="General task", help="Task context")
-    run_parser.add_argument("--max-lines", type=int, default=0, help="Response line target")
-    run_parser.add_argument("--profile", choices=["default", "research"], default="default", help="Model profile")
-    run_parser.set_defaults(handler=lambda args: run_delegation(args, sys.stdin.read()))
 
     install_parser = subparsers.add_parser("install", help="Install local delegation files into a target repo")
     install_parser.add_argument("--target", required=True, help="Target repository directory")
@@ -68,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_parser = subparsers.add_parser("verify", help="Verify an existing local delegation install")
     verify_parser.add_argument("--target", required=True, help="Target repository directory")
+    verify_parser.add_argument(
+        "--preserve-claude-md",
+        action="store_true",
+        help="Accept a multi-line CLAUDE.md that starts with @AGENTS.md (matches --preserve-claude-md install).",
+    )
     verify_parser.set_defaults(handler=verify)
 
     uninstall_parser = subparsers.add_parser("uninstall", help="Remove managed delegation files from a target repo")

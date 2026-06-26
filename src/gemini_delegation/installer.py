@@ -109,11 +109,11 @@ recursive repo scans, or expected output > 500 lines. Run from the repo root:
 ```powershell
 & .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10
 & .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10 -Profile research
+& .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10 -Profile scout
 ```
 
-Set `DELEGATION_BACKEND=gemini-api` with a `GEMINI_API_KEY` from
-https://aistudio.google.com/apikey to delegate without an agy install.
-
+Scout (Gemma 4, 1.5K RPD): file mapping, log parsing, dep scanning, test discovery — read only.
+Fallbacks: `DELEGATION_BACKEND=gemini-api` (needs `GEMINI_API_KEY`) or `DELEGATION_BACKEND=gemini-cli` (npm).
 When running as Antigravity or `agy`, do the work directly — do not recursively invoke `agy`.
 {AGENTS_MARKER_END}
 """
@@ -239,15 +239,17 @@ def copy_shared_hooks(project_dir: Path) -> Path:
 
 
 _CLAUDE_COMMAND_DELEGATE = """\
-Delegate the following task to the agy (Antigravity) Gemini backend using the
-in-repo delegation script. Run from the repository root and report the full output:
+Delegate the following task to the Gemini backend using the in-repo delegation
+script. Run from the repository root and report the full output:
 
 ```powershell
 & .gemini-delegation/hooks/delegate_and_log.ps1 "$ARGUMENTS" "/delegate" 10
 ```
 
-Add `-Profile research` when the task involves web search, documentation
-lookup, security audits, or reading many files.
+Profile guide:
+- (default) general code tasks and broad output
+- `-Profile research` web search, docs, security audits
+- `-Profile scout` file mapping, log parsing, dep scanning, test discovery (Gemma 4, 1.5K RPD)
 """
 
 

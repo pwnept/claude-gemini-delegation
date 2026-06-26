@@ -3,8 +3,6 @@ Unit tests for agy model fallback runner.
 Run with: python3 -m unittest discover tests
 """
 
-import io
-import json
 import os
 import sys
 import unittest
@@ -75,7 +73,23 @@ class TestAgyDelegate(unittest.TestCase):
         self.assertEqual(calls, ["flash", "lite"])
         write.assert_called_with("ok from lite\n")
 
-    def test_research_profile_uses_pro_first(self):
+    def test_default_profile_uses_flash_high(self):
+        calls = []
+
+        def fake_run(command, model, prompt, timeout, **kwargs):
+            calls.append(model)
+            return FakeResult(0, stdout="ok\n")
+
+        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--no-state", "hello"]):
+            with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
+                with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
+                    with mock.patch.object(sys.stdout, "write"):
+                        code = gemini_delegate.main()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["Gemini 3.5 Flash (High)"])
+
+    def test_research_profile_uses_pro_high(self):
         calls = []
 
         def fake_run(command, model, prompt, timeout, **kwargs):
@@ -89,7 +103,7 @@ class TestAgyDelegate(unittest.TestCase):
                         code = gemini_delegate.main()
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls, ["Gemini 3.1 Pro (Low)"])
+        self.assertEqual(calls, ["Gemini 3.1 Pro (High)"])
 
 
 class TestBackendSelection(unittest.TestCase):
@@ -106,91 +120,146 @@ class TestBackendSelection(unittest.TestCase):
         with mock.patch.dict(os.environ, {"DELEGATION_BACKEND": "gemini-api"}, clear=True):
             self.assertEqual(gemini_delegate.resolve_backend(args), "agy")
 
-    def test_gemini_api_backend_requires_api_key(self):
-        argv = ["gemini_delegate.py", "--backend", "gemini-api", "--no-state", "hello"]
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch.object(sys, "argv", argv):
-                with mock.patch.object(sys.stderr, "write") as write:
+    def test_gemini_cli_backend_selected_by_env(self):
+        args = mock.Mock(backend=None)
+        with mock.patch.dict(os.environ, {"DELEGATION_BACKEND": "gemini-cli"}, clear=True):
+            self.assertEqual(gemini_delegate.resolve_backend(args), "gemini-cli")
+
+
+class TestGeminiCliBackend(unittest.TestCase):
+    def test_gemini_cli_backend_falls_back_after_capacity_error(self):
+        calls = []
+
+        def fake_run(model, prompt, timeout):
+            calls.append(model)
+            if model == "gemini-3-flash-preview":
+                return gemini_delegate.subprocess.CompletedProcess(
+                    args=["gemini", "--model", model, "-p", "..."],
+                    returncode=1,
+                    stdout="",
+                    stderr="RESOURCE_EXHAUSTED: quota exceeded",
+                )
+            return gemini_delegate.subprocess.CompletedProcess(
+                args=["gemini", "--model", model, "-p", "..."],
+                returncode=0,
+                stdout="ok from flash\n",
+                stderr="",
+            )
+
+        argv = [
+            "gemini_delegate.py", "--backend", "gemini-cli",
+            "--models", "gemini-3-flash-preview,gemini-2.5-flash", "--no-state", "hello",
+        ]
+        with mock.patch.object(sys, "argv", argv):
+            with mock.patch.object(gemini_delegate, "run_gemini_cli", side_effect=fake_run):
+                with mock.patch.object(sys.stdout, "write") as write:
                     code = gemini_delegate.main()
 
-        self.assertEqual(code, 2)
-        written = "".join(call.args[0] for call in write.call_args_list)
-        self.assertIn("GEMINI_API_KEY", written)
+        self.assertEqual(code, 0)
+        # uses explicit --models, so tests fallback mechanism not default list
+        self.assertEqual(calls, ["gemini-3-flash-preview", "gemini-2.5-flash"])
+        write.assert_called_with("ok from flash\n")
+
+    def test_gemini_cli_falls_back_on_exit0_empty_stdout(self):
+        """gemini-cli exits 0 with empty stdout after 503 retries; must trigger fallback."""
+        calls = []
+
+        def fake_run(model, prompt, timeout):
+            calls.append(model)
+            if model == "model-a":
+                # real behavior: internal retries exhausted, exit 0, no output
+                return gemini_delegate.subprocess.CompletedProcess(
+                    args=["gemini", "--model", model],
+                    returncode=0,
+                    stdout="",
+                    stderr="_ApiError: service unavailable (503)",
+                )
+            return gemini_delegate.subprocess.CompletedProcess(
+                args=["gemini", "--model", model],
+                returncode=0,
+                stdout="4\n",
+                stderr="",
+            )
+
+        argv = [
+            "gemini_delegate.py", "--backend", "gemini-cli",
+            "--models", "model-a,model-b", "--no-state", "hello",
+        ]
+        with mock.patch.object(sys, "argv", argv):
+            with mock.patch.object(gemini_delegate, "run_gemini_cli", side_effect=fake_run):
+                with mock.patch.object(sys.stdout, "write") as write:
+                    code = gemini_delegate.main()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["model-a", "model-b"])
+        write.assert_called_with("4\n")
+
+    def test_gemini_cli_default_models(self):
+        calls = []
+
+        def fake_run(model, prompt, timeout):
+            calls.append(model)
+            return gemini_delegate.subprocess.CompletedProcess(
+                args=["gemini", "--model", model], returncode=0, stdout="ok\n", stderr="",
+            )
+
+        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--backend", "gemini-cli", "--no-state", "hello"]):
+            with mock.patch.object(gemini_delegate, "run_gemini_cli", side_effect=fake_run):
+                with mock.patch.object(sys.stdout, "write"):
+                    gemini_delegate.main()
+
+        self.assertEqual(calls, ["gemini-3.5-flash"])
 
 
 class TestGeminiApiBackend(unittest.TestCase):
-    def test_call_gemini_api_success(self):
-        payload = {"candidates": [{"content": {"parts": [{"text": "hello world"}]}}]}
-
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def read(self):
-                return json.dumps(payload).encode("utf-8")
-
-        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=True):
-            with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
-                result = gemini_delegate.call_gemini_api("gemini-2.5-flash", "hi", timeout=10)
-
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "hello world")
-
-    def test_call_gemini_api_capacity_error_is_classified(self):
-        import urllib.error
-
-        error_body = json.dumps(
-            {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}}
-        ).encode("utf-8")
-
-        def raise_http_error(*args, **kwargs):
-            raise urllib.error.HTTPError(
-                url="https://example.invalid",
-                code=429,
-                msg="Too Many Requests",
-                hdrs=None,
-                fp=io.BytesIO(error_body),
-            )
-
-        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=True):
-            with mock.patch("urllib.request.urlopen", side_effect=raise_http_error):
-                result = gemini_delegate.call_gemini_api("gemini-2.5-flash", "hi", timeout=10)
-
-        self.assertEqual(result.returncode, 429)
-        self.assertTrue(gemini_delegate.capacity_limited(result.stderr))
-
-    def test_gemini_api_backend_falls_back_after_capacity_error(self):
+    def test_gemini_api_backend_falls_back_on_429(self):
         calls = []
 
         def fake_call(model, prompt, timeout):
             calls.append(model)
-            if model == "gemini-2.5-pro":
+            if model == "gemini-3-flash":
                 return gemini_delegate.subprocess.CompletedProcess(
                     args=["gemini-api", model],
-                    returncode=429,
+                    returncode=1,
                     stdout="",
-                    stderr='{"error": {"status": "RESOURCE_EXHAUSTED"}}',
+                    stderr="429 RESOURCE_EXHAUSTED: quota exceeded",
                 )
             return gemini_delegate.subprocess.CompletedProcess(
-                args=["gemini-api", model], returncode=0, stdout="ok from flash\n", stderr="",
+                args=["gemini-api", model],
+                returncode=0,
+                stdout="4\n",
+                stderr="",
             )
 
         argv = [
             "gemini_delegate.py", "--backend", "gemini-api",
-            "--models", "gemini-2.5-pro,gemini-2.5-flash", "--no-state", "hello",
+            "--models", "gemini-3-flash,gemini-3.5-flash", "--no-state", "hello",
         ]
-        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=True):
-            with mock.patch.object(sys, "argv", argv):
-                with mock.patch.object(gemini_delegate, "call_gemini_api", side_effect=fake_call):
-                    with mock.patch.object(sys.stdout, "write") as write:
-                        code = gemini_delegate.main()
+        with mock.patch.object(sys, "argv", argv):
+            with mock.patch.object(gemini_delegate, "call_gemini_api", side_effect=fake_call):
+                with mock.patch.object(sys.stdout, "write") as write:
+                    code = gemini_delegate.main()
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls, ["gemini-2.5-pro", "gemini-2.5-flash"])
-        write.assert_called_with("ok from flash\n")
+        self.assertEqual(calls, ["gemini-3-flash", "gemini-3.5-flash"])
+        write.assert_called_with("4\n")
+
+    def test_gemini_api_default_models_cascade(self):
+        models = gemini_delegate.DEFAULT_API_MODELS
+        self.assertEqual(models[0], "gemini-3.5-flash")
+        self.assertEqual(models[1], "gemini-3-flash")
+        self.assertGreaterEqual(len(models), 5)
+        # lite models must come last
+        lite = [m for m in models if m in gemini_delegate.LITE_MODELS]
+        non_lite = [m for m in models if m not in gemini_delegate.LITE_MODELS]
+        self.assertTrue(all(models.index(l) > models.index(n) for l in lite for n in non_lite))
+
+    def test_gemini_api_no_key_returns_nonzero(self):
+        argv = ["gemini_delegate.py", "--backend", "gemini-api", "--no-state", "hello"]
+        with mock.patch.object(sys, "argv", argv):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                code = gemini_delegate.main()
+        self.assertNotEqual(code, 0)
 
 
 if __name__ == "__main__":

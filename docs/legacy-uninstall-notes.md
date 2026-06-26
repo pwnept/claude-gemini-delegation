@@ -19,12 +19,10 @@ The intended installer is now local-first:
 `uninstall --target <path>` removes managed local delegation files:
 
 - `.gemini-delegation/`
-- `.claude/hooks/delegate*`
-- `.claude/hooks/delegation_guard.ps1`
-- `.codex/hooks/delegate*`
-- `.codex/hooks/delegation_guard.ps1`
+- `.claude/commands/delegate.md`
 - `.agents/rules/delegation.md`
 - the managed `[claude-gemini-delegation:agents-begin]` block in `AGENTS.md`
+- legacy direct-copy hook files in `.claude/hooks/` (if present from older installs)
 
 It writes a fresh report to:
 

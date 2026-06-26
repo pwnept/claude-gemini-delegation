@@ -1,10 +1,11 @@
 # Claude Gemini Delegation
 
-Local-first delegation hooks for Claude Code and Codex. The default backend is
-`agy` (Antigravity CLI), which can route broad, high-output, or research-heavy
-work away from the main Claude/Codex session while preserving a concise
-handoff. A direct Gemini API backend is also available — see
-[Choosing A Backend](#choosing-a-backend).
+Local-first delegation hooks for Claude Code and Codex. Routes broad, high-output,
+or research-heavy work to a Gemini backend so the main session stays lean.
+
+Three backends are supported — `agy` (Antigravity CLI) is the default. Three
+model profiles are available: `default` (Flash cascade), `research` (Pro, agy
+only), and `scout` (Gemma 4, 1.5K RPD — ideal for read-heavy file work).
 
 ## Intended Workflow
 
@@ -38,23 +39,27 @@ delegation instructions and hook files. External executables such as Python and
 
 - PowerShell 7+ preferred for the installer and wrappers.
 - Python 3.8+.
-- For the default `agy` backend: Antigravity CLI `agy` installed and signed in.
-- For the `gemini-api` backend instead: a free API key from
-  https://aistudio.google.com/apikey, no other install required.
-- Windows only, `agy` backend: `pywinpty` is recommended for reliable
-  `agy.exe` output capture:
+- **`agy` backend (default):** Antigravity CLI `agy` installed and signed in.
+  Windows: `pywinpty` is recommended for reliable output capture:
+  ```powershell
+  py -3 -m pip install --user pywinpty
+  ```
+- **`gemini-cli` backend:** Node.js 18+ and `npm install -g @google/gemini-cli`.
+  Authenticate once interactively with `gemini auth login` (OAuth, persists
+  across sessions). A `GEMINI_API_KEY` in `$PROFILE` also works for non-browser
+  environments.
+- **`gemini-api` backend:** A free API key from
+  https://aistudio.google.com/apikey added to `$PROFILE`:
+  ```powershell
+  $env:GEMINI_API_KEY = "your-key"
+  ```
+  No extra installs — uses Python stdlib `urllib` only.
 
-```powershell
-py -3 -m pip install --user pywinpty
-```
-
-The installer itself uses only Python standard library modules. `pywinpty` is an
-optional runtime dependency for Windows `agy` capture.
+The installer itself uses only Python standard library modules.
 
 ## Principal Features
 
 - Local target install with no hidden project registry.
-- Claude Code and Codex hook shims that share one local backend.
 - `AGENTS.md` managed delegation section with stable bracketed markers.
 - Root `CLAUDE.md` migration to `@AGENTS.md`.
 - `.claude/CLAUDE.md` migration into `AGENTS.md` when present.
@@ -72,20 +77,15 @@ AGENTS.md
 CLAUDE.md
 .gemini-delegation/
   delegation_config.json
-  hooks/
+  hooks/                    <- all hook implementations live here
 .claude/
-  hooks/
-  settings.json
-.codex/
-  hooks/
+  commands/delegate.md      <- /delegate slash-command
+  settings.json             <- PreToolUse guard wired here
 .agents/
-  rules/delegation.md
+  rules/delegation.md       <- Antigravity workspace rule
 agents/
   code-review-agent-dave/
 ```
-
-`.gemini-delegation/hooks/` contains the copied implementation. `.claude/hooks/`
-and `.codex/hooks/` contain lightweight shims that call the shared local backend.
 
 ## Managed Markers
 
@@ -115,63 +115,113 @@ migrated into `AGENTS.md`, backed up, and removed.
 This keeps Claude Code, Codex, and Antigravity reading the same project-level
 delegation policy.
 
+Use `--preserve-claude-md` when the target has a hand-authored `CLAUDE.md` that
+already imports `@AGENTS.md` on line 1. The migration is skipped and the file
+is left untouched:
+
+```powershell
+.\install-delegation.ps1 install --target "F:\EDFN" --preserve-claude-md
+```
+
 ## Expected Delegate Commands
 
-Claude Code should use:
+Claude Code and Codex should use the hook installed in the target repo:
 
 ```powershell
-& .claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+# Default (Flash cascade, agy backend)
+& .gemini-delegation/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+
+# Research: web search, documentation lookup, security audits
+& .gemini-delegation/hooks/delegate_and_log.ps1 "find current deployment docs" "Research" 10 -Profile research
+
+# Scout: file mapping, log parsing, dependency scanning, test discovery (read-only)
+& .gemini-delegation/hooks/delegate_and_log.ps1 "list all test files under src/" "Scout" 10 -Profile scout
 ```
 
-Codex may use:
+The lower-level two-step flow (format prompt then pipe to runner):
 
 ```powershell
-& .codex/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
-```
-
-For research-heavy work:
-
-```powershell
-& .claude/hooks/delegate_and_log.ps1 "find current deployment docs" "Research" 10 -Profile research
-```
-
-The lower-level two-step flow is:
-
-```powershell
-$prompt = & .claude/hooks/delegate.ps1 "npm ls" "Build analysis" 5
+$prompt = & .gemini-delegation/hooks/delegate.ps1 "npm ls" "Build analysis" 5
 $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 ```
 
+Or use the `/delegate` slash-command in Claude Code, which runs the same
+`delegate_and_log.ps1` via `.claude/commands/delegate.md`.
+
 ## Choosing A Backend
 
-Two backends are supported. `agy` is the default, so existing installs and
+Three backends are supported. `agy` is the default, so existing installs and
 the examples above keep working unchanged.
 
 | Backend | Selected by | Needs |
 |---|---|---|
-| `agy` (default) | nothing, or `--backend agy` / `DELEGATION_BACKEND=agy` | Antigravity CLI installed and signed in |
-| `gemini-api` | `--backend gemini-api` or `DELEGATION_BACKEND=gemini-api` | a free API key from https://aistudio.google.com/apikey |
+| `agy` (default) | nothing, or `DELEGATION_BACKEND=agy` | Antigravity CLI installed and signed in |
+| `gemini-cli` | `DELEGATION_BACKEND=gemini-cli` | `npm install -g @google/gemini-cli` + `gemini auth login` |
+| `gemini-api` | `DELEGATION_BACKEND=gemini-api` | `GEMINI_API_KEY` in `$PROFILE` — no extra installs |
 
-To use the direct API backend:
+`gemini-api` is the preferred agy fallback. It uses stdlib `urllib` with no
+additional dependencies and cascades through five models in order, each with an
+independent daily/RPM quota:
 
-```powershell
-$env:DELEGATION_BACKEND = "gemini-api"
-$env:GEMINI_API_KEY = "<key from aistudio.google.com>"
-& .claude/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+```
+gemini-3.5-flash → gemini-3-flash → gemini-2.5-flash →
+gemini-3.1-flash-lite → gemini-2.5-flash-lite
 ```
 
-It calls `https://generativelanguage.googleapis.com` directly over
-`urllib` — no extra dependency, no GUI/ConPTY capture, works headless. Model
-fallback order defaults to `gemini-2.5-flash` (or `gemini-2.5-pro` first for
-`-Profile research`); override with `--models` or `GEMINI_API_MODELS`.
-Capacity errors (HTTP 429 / `RESOURCE_EXHAUSTED`) trigger the same per-model
-cooldown and fallback behavior as the `agy` backend, just tracked in a
-separate state file (`gemini_api_model_state.json`).
+Lite models are last-resort. The pipeline prints a warning when one is selected,
+since output quality may be lower. They are acceptable for file search and
+grounding tasks — grounding RPD is generous (1500/day for default, Gemini 2.5,
+and Gemini 2 keys).
 
-Adding another backend (OpenAI, Anthropic, ...) is one `call_<backend>()`
-function shaped like `call_gemini_api`, one branch in `gemini_delegate.py:main()`,
-and an entry in the `BACKENDS` tuple — the fallback/cooldown loop
-(`run_with_fallback`) is shared by all backends.
+A 429 on any model marks it cooled-down and immediately retries on the next.
+Override with `--models` or `GEMINI_API_MODELS`.
+
+`gemini-cli` is a full agent (file reads, workspace browsing). It defaults to
+`gemini-3.5-flash` then cascades through four fallbacks including lite models.
+Override with `--models` or `GEMINI_CLI_MODELS`.
+
+On Windows, `gemini-cli` is launched with `--skip-trust` and `--yolo` so it
+runs headless without blocking on interactive prompts. The process tree is killed
+immediately on the first capacity signal to prevent the CLI's internal retry loop
+from wasting extra RPD.
+
+To set up either API backend (same key, same `$PROFILE` line):
+
+```powershell
+# Once, in $PROFILE:
+$env:GEMINI_API_KEY = "<key from aistudio.google.com>"
+
+# Then per-session or in scripts:
+$env:DELEGATION_BACKEND = "gemini-api"   # or "gemini-cli"
+& .gemini-delegation/hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
+```
+
+Capacity errors trigger the same cooldown/fallback behavior across all backends,
+tracked in per-backend state files (`gemini_cli_model_state.json`,
+`gemini_api_model_state.json`).
+
+## Model Profiles
+
+Three profiles are available via the `-Profile` flag:
+
+| Profile | Models | Best for |
+|---|---|---|
+| `default` | Flash cascade (3.5 → 3 → 2.5 → lite) | General delegation, code tasks |
+| `research` | Pro (agy only), falls back to Flash | Web search, docs, security audits |
+| `scout` | Gemma 4 31B → Gemma 4 26B A4B | File mapping, log parsing, dep scanning, test discovery |
+
+The **scout profile** uses Gemma 4 models with 1.5K RPD and unlimited TPM. Use
+it for tasks that read many files but do not require code authoring or complex
+reasoning. Keep code writing and architectural decisions on the main Claude
+session or the `default` / `research` profiles.
+
+Scout model IDs (both confirmed working via gemini-cli):
+- `gemma-4-31b-it` — full 31B model, primary
+- `gemma-4-26b-a4b-it` — 26B MoE with 4B active params, faster fallback
+
+Adding another backend means one `run_<backend>()` function, one
+`run_<backend>_backend()` wrapper, one branch in `gemini_delegate.py:main()`,
+and an entry in the `BACKENDS` tuple — `run_with_fallback` is shared by all.
 
 ## When Agents Should Delegate
 
@@ -183,6 +233,7 @@ Claude Code and Codex should delegate:
 - Recursive searches and broad multi-file analysis.
 - Security audits and vulnerability scans.
 - Documentation lookup or web research.
+- File structure mapping, log parsing, and test coverage discovery (`-Profile scout`).
 
 When the current agent is Antigravity or `agy` itself, it should do the work
 directly and must not recursively invoke `agy`.
@@ -192,9 +243,9 @@ directly and must not recursively invoke `agy`.
 Use local target installs by default. They are more portable and easier for an
 AI agent to audit because every managed file lives in the target repo.
 
-Global setup is not the default and the new installer does not mutate a global
-project registry. If you find an old `~/.gemini-delegation-registry.json`, see
-`docs/legacy-uninstall-notes.md`.
+Global setup is not the default and the installer does not mutate a global
+project registry. If you find an old `~/.gemini-delegation-registry.json`,
+see `docs/legacy-uninstall-notes.md`.
 
 ## Error Handling Philosophy
 
@@ -232,6 +283,7 @@ From this repository, use the source hooks directly for broad repo analysis:
 ```powershell
 & hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
 & hooks/delegate_and_log.ps1 "audit @src/ for SQL injection" "Security" 10 -Profile research
+& hooks/delegate_and_log.ps1 "map all test files under src/" "Scout" 10 -Profile scout
 ```
 
 Run checks before handing off changes:
