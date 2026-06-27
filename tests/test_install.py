@@ -96,7 +96,7 @@ class TestAgentsSection(unittest.TestCase):
             line for line in content.splitlines()
             if line.strip() not in {AGENTS_MARKER_BEGIN, AGENTS_MARKER_END}
         ]
-        self.assertLess(len(inner_lines), 15, "agents_section grew too large; keep it slim")
+        self.assertLess(len(inner_lines), 18, "agents_section grew too large; keep it slim")
 
     def test_agents_section_contains_delegate_command(self):
         content = agents_section()
@@ -104,6 +104,11 @@ class TestAgentsSection(unittest.TestCase):
         self.assertIn("agy", content.lower())
         self.assertIn(AGENTS_MARKER_BEGIN, content)
         self.assertIn(AGENTS_MARKER_END, content)
+
+    def test_agents_section_has_no_caller_flag(self):
+        """Call instruction must be identical for every harness — no -Caller in examples."""
+        content = agents_section()
+        self.assertNotIn("-Caller", content)
 
     def test_agents_section_mentions_fallback_backends(self):
         content = agents_section()
@@ -135,6 +140,38 @@ class TestClaudeCommand(unittest.TestCase):
             uninstall_hooks(target_dir=tmpdir)
             delegate_md = Path(tmpdir) / ".claude" / "commands" / "delegate.md"
             self.assertFalse(delegate_md.exists())
+
+
+class TestDelegationCallerToken(unittest.TestCase):
+    def test_install_writes_delegation_caller_env_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            install_hooks(target_dir=tmpdir)
+            settings = json.loads(
+                (Path(tmpdir) / ".claude" / "settings.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(settings.get("env", {}).get("DELEGATION_CALLER"), "claude")
+
+    def test_uninstall_removes_delegation_caller_env_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            install_hooks(target_dir=tmpdir)
+            uninstall_hooks(target_dir=tmpdir)
+            settings = json.loads(
+                (Path(tmpdir) / ".claude" / "settings.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn("DELEGATION_CALLER", settings.get("env", {}))
+
+    def test_revert_preserves_unrelated_env_keys(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+            (claude_dir / "settings.json").write_text(
+                json.dumps({"env": {"DELEGATION_CALLER": "claude", "MY_VAR": "keep"}}),
+                encoding="utf-8",
+            )
+            revert_claude_settings(claude_dir)
+            settings = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+            self.assertNotIn("DELEGATION_CALLER", settings.get("env", {}))
+            self.assertEqual(settings["env"]["MY_VAR"], "keep")
 
 
 class TestRevertClaudeSettings(unittest.TestCase):

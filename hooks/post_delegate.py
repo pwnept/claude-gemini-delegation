@@ -22,6 +22,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+from delegation_caller import resolve_log_dir  # noqa: E402
+
 
 def count_lines(text: str) -> int:
     """Count actual lines in response."""
@@ -124,6 +126,23 @@ def main():
         print(__doc__)
         sys.exit(1)
 
+    # Extract --caller before positional parsing; does not affect other args.
+    caller = "auto"
+    agent_dir_override = None
+    filtered = []
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i] == "--caller" and i + 1 < len(sys.argv):
+            caller = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == "--agent-dir" and i + 1 < len(sys.argv):
+            agent_dir_override = Path(sys.argv[i + 1])
+            i += 2
+        else:
+            filtered.append(sys.argv[i])
+            i += 1
+    sys.argv = [sys.argv[0]] + filtered
+
     if sys.argv[1] == '--input-file':
         if len(sys.argv) < 3:
             print("--input-file requires a path argument", file=sys.stderr)
@@ -138,31 +157,35 @@ def main():
         task_context = sys.argv[3] if len(sys.argv) > 3 else "unknown"
     
     # Determine metrics directory
-    agent_dir = None
-    current_dir = Path.cwd()
+    # Fast path: --agent-dir passed by delegate_and_log.ps1 (avoids cwd tree-walk)
+    if agent_dir_override is not None:
+        agent_dir = agent_dir_override
+    else:
+        agent_dir = None
+        current_dir = Path.cwd()
 
-    # 1. Respect DELEGATION_HOOK_PREFIX env var set by per-env shim
-    hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
-    if hook_prefix:
-        prefix_path = Path(hook_prefix)
-        if prefix_path.parent.name in (".claude", ".codex", ".Codex"):
-            agent_dir = prefix_path.parent
+        # 1. Respect DELEGATION_HOOK_PREFIX env var set by per-env shim
+        hook_prefix = os.environ.get("DELEGATION_HOOK_PREFIX")
+        if hook_prefix:
+            prefix_path = Path(hook_prefix)
+            if prefix_path.parent.name in (".claude", ".codex", ".Codex"):
+                agent_dir = prefix_path.parent
 
-    # 2. Search up the tree (.gemini-delegation preferred over .claude)
-    if agent_dir is None:
-        for directory in (current_dir, *current_dir.parents):
-            for name in (".gemini-delegation", ".claude"):
-                candidate = directory / name
-                if candidate.exists():
-                    agent_dir = candidate
+        # 2. Search up the tree (.gemini-delegation preferred over .claude)
+        if agent_dir is None:
+            for directory in (current_dir, *current_dir.parents):
+                for name in (".gemini-delegation", ".claude"):
+                    candidate = directory / name
+                    if candidate.exists():
+                        agent_dir = candidate
+                        break
+                if agent_dir:
                     break
-            if agent_dir:
-                break
 
-    if agent_dir is None:
-        agent_dir = current_dir / ".gemini-delegation"
+        if agent_dir is None:
+            agent_dir = current_dir / ".gemini-delegation"
 
-    metrics_dir = agent_dir / "metrics"
+    metrics_dir = resolve_log_dir(caller, agent_dir / "metrics")
     
     # Validate response
     actual_lines = count_lines(response)

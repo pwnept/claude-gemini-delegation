@@ -3,11 +3,13 @@
 Analyze delegation metrics to identify optimization opportunities
 
 Usage:
-    python analyze_metrics.py [--days N]
-    
+    python analyze_metrics.py [--days N] [--caller claude|codex|agy|all]
+
 Options:
-    --days N    Analyze metrics from the last N days (default: 7)
-""" 
+    --days N              Analyze metrics from the last N days (default: 7)
+    --caller HARNESS      Search harness home delegation-logs/ dir instead of
+                          the repo tree. Use 'all' to aggregate all harnesses.
+"""
 
 import sys
 import csv
@@ -15,6 +17,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter
 from typing import List, Optional, Tuple
+
+from delegation_caller import CALLER_LOG_DIRS as _CALLER_LOG_DIRS
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -38,26 +42,24 @@ def parse_csv_line(line: str) -> Optional[Tuple[str, str, int, int]]:
     return parse_csv_row(next(csv.reader([line])))
 
 
-def load_metrics(metrics_dir: Path, days: int) -> List[Tuple[str, str, int, int]]:
-    """Load metrics from the last N days."""
+def load_metrics(metrics_dirs: List[Path], days: int) -> List[Tuple[str, str, int, int]]:
+    """Load metrics from the last N days across one or more directories."""
     metrics = []
-    
-    for i in range(days):
-        date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-        log_file = metrics_dir / f"delegation-{date}.csv"
-        
-        if not log_file.exists():
+    for metrics_dir in metrics_dirs:
+        if not metrics_dir.exists():
             continue
-        
-        with log_file.open('r', encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            next(reader, None)
-
-            for row in reader:
-                parsed = parse_csv_row(row)
-                if parsed:
-                    metrics.append(parsed)
-    
+        for i in range(days):
+            date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            log_file = metrics_dir / f"delegation-{date}.csv"
+            if not log_file.exists():
+                continue
+            with log_file.open('r', encoding="utf-8", newline="") as f:
+                reader = csv.reader(f)
+                next(reader, None)
+                for row in reader:
+                    parsed = parse_csv_row(row)
+                    if parsed:
+                        metrics.append(parsed)
     return metrics
 
 
@@ -156,40 +158,57 @@ def analyze_metrics(metrics: List[Tuple[str, str, int, int]]):
 def main():
     """Main execution."""
     days = 7
-    
-    # Parse command line arguments
-    if len(sys.argv) > 1:
-        if sys.argv[1] in ('-h', '--help'):
+    caller = None
+
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg in ('-h', '--help'):
             print(__doc__)
             sys.exit(0)
-        if sys.argv[1] == '--days' and len(sys.argv) > 2:
-            days = int(sys.argv[2])
-    
-    # Prefer .gemini-delegation/ for metrics; fall back to .claude/.
-    current_dir = Path.cwd()
-    agent_dir = None
-    for directory in (current_dir, *current_dir.parents):
-        for name in (".gemini-delegation", ".claude"):
-            candidate = directory / name
-            if candidate.exists():
-                agent_dir = candidate
-                break
-        if agent_dir:
-            break
-    if agent_dir is None:
-        print("❌ Error: neither .gemini-delegation nor .claude directory found")
-        print("   Run this script from your project root or a subdirectory")
-        sys.exit(1)
+        elif arg == '--days' and i + 1 < len(sys.argv):
+            days = int(sys.argv[i + 1])
+            i += 2
+        elif arg == '--caller' and i + 1 < len(sys.argv):
+            caller = sys.argv[i + 1]
+            i += 2
+        else:
+            i += 1
 
-    metrics_dir = agent_dir / "metrics"
-    
-    if not metrics_dir.exists():
+    if caller is not None:
+        # Search harness home dirs instead of the repo tree.
+        if caller == "all":
+            metrics_dirs = list(_CALLER_LOG_DIRS.values())
+        elif caller in _CALLER_LOG_DIRS:
+            metrics_dirs = [_CALLER_LOG_DIRS[caller]]
+        else:
+            print(f"❌ Unknown caller {caller!r}. Use: claude, codex, agy, all")
+            sys.exit(1)
+    else:
+        # Default: walk up from cwd to find the repo's agent dir.
+        current_dir = Path.cwd()
+        agent_dir = None
+        for directory in (current_dir, *current_dir.parents):
+            for name in (".gemini-delegation", ".claude"):
+                candidate = directory / name
+                if candidate.exists():
+                    agent_dir = candidate
+                    break
+            if agent_dir:
+                break
+        if agent_dir is None:
+            print("❌ Error: neither .gemini-delegation nor .claude directory found")
+            print("   Run from your project root, or use --caller to search a harness home.")
+            sys.exit(1)
+        metrics_dirs = [agent_dir / "metrics"]
+
+    if not any(d.exists() for d in metrics_dirs):
+        dirs_str = ", ".join(str(d) for d in metrics_dirs)
         print("📊 No metrics directory found")
-        print(f"   Metrics will be created at: {metrics_dir}")
+        print(f"   Searched: {dirs_str}")
         sys.exit(0)
-    
-    # Load and analyze metrics
-    metrics = load_metrics(metrics_dir, days)
+
+    metrics = load_metrics(metrics_dirs, days)
     analyze_metrics(metrics)
 
 

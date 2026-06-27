@@ -4,11 +4,16 @@ param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Task,
     [Parameter(Position = 1)][string]$Context = "General task",
     [Parameter(Position = 2)][int]$MaxLines = 0,
-    [ValidateSet("default", "research")]
-    [string]$Profile = "default"
+    [ValidateSet("default", "research", "scout")]
+    [string]$Profile = "default",
+    [ValidateSet("claude", "codex", "agy", "auto")]
+    [string]$Caller = "auto"
 )
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# .gemini-delegation dir (parent of hooks/) — passed to Python hooks so they
+# skip the per-call cwd up-walk (path-discovery optimization).
+$AgentDir  = Split-Path -Parent $ScriptDir
 $script:LastPythonExitCode = 0
 
 function Invoke-Python3 {
@@ -62,9 +67,12 @@ if ($preExitCode -ne 0 -or -not $prompt) {
 }
 $promptText = $prompt -join "`n"
 
-$delegateArgs = @("$ScriptDir/gemini_delegate.py")
+$delegateArgs = @("$ScriptDir/gemini_delegate.py", "--agent-dir", $AgentDir)
 if ($Profile -ne "default") {
     $delegateArgs += @("--profile", $Profile)
+}
+if ($Caller -ne "auto") {
+    $delegateArgs += @("--caller", $Caller)
 }
 
 # Pass Prompt via stdin to avoid command line length limits (8KB)
@@ -78,7 +86,9 @@ if ($responseText) {
     $tmpFile = [System.IO.Path]::GetTempFileName()
     try {
         $responseText | Set-Content -Path $tmpFile -Encoding UTF8
-        Invoke-Python3 -PythonArgs @("$ScriptDir/post_delegate.py", "--input-file", $tmpFile, "$maxLinesForValidation", $Task) | Out-Null
+        $postArgs = @("$ScriptDir/post_delegate.py", "--agent-dir", $AgentDir, "--input-file", $tmpFile, "$maxLinesForValidation", $Task)
+        if ($Caller -ne "auto") { $postArgs += @("--caller", $Caller) }
+        Invoke-Python3 -PythonArgs $postArgs | Out-Null
     } finally {
         Remove-Item $tmpFile -ErrorAction SilentlyContinue
     }

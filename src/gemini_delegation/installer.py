@@ -104,7 +104,8 @@ def agents_section() -> str:
 ## Delegation
 
 Delegate to `agy` for: security audits, web/doc search, reading 3+ new files,
-recursive repo scans, or expected output > 500 lines. Run from the repo root:
+recursive repo scans, or expected output > 500 lines. The hook auto-detects the
+calling harness — use the same command regardless of which agent is running:
 
 ```powershell
 & .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10
@@ -284,6 +285,10 @@ def create_claude_settings(claude_dir: Path) -> Path:
     else:
         settings = {}
 
+    # Inject DELEGATION_CALLER so the hook auto-routes logs to ~/.claude/delegation-logs/
+    # without needing an explicit -Caller argument (update-proof: we own this var).
+    settings.setdefault("env", {})["DELEGATION_CALLER"] = "claude"
+
     hooks = settings.setdefault("hooks", {})
     pre_tool_use = hooks.setdefault("PreToolUse", [])
     def _is_guard(hook: dict) -> bool:
@@ -320,7 +325,8 @@ def create_claude_settings(claude_dir: Path) -> Path:
 
 
 def revert_claude_settings(claude_dir: Path) -> bool:
-    """Strip delegation_guard PreToolUse entries from .claude/settings.json.
+    """Strip delegation_guard PreToolUse entries and DELEGATION_CALLER env token
+    from .claude/settings.json.
 
     Returns True if the file was changed.  Does not touch any other keys.
     """
@@ -332,10 +338,23 @@ def revert_claude_settings(claude_dir: Path) -> bool:
     except json.JSONDecodeError:
         return False
 
+    changed_env = False
+    env_block = settings.get("env", {})
+    if env_block.get("DELEGATION_CALLER") == "claude":
+        del env_block["DELEGATION_CALLER"]
+        if not env_block:
+            settings.pop("env", None)
+        else:
+            settings["env"] = env_block
+        changed_env = True
+
     hooks = settings.get("hooks", {})
     pre_tool_use = hooks.get("PreToolUse", [])
     if not pre_tool_use:
-        return False
+        if changed_env:
+            _write_if_changed(settings_path, json.dumps(settings, indent=2) + "\n")
+            print(f"[OK] Removed DELEGATION_CALLER from {settings_path}")
+        return changed_env
 
     def _is_delegation_guard(hook: dict) -> bool:
         if "delegation_guard" in hook.get("command", ""):
@@ -355,7 +374,7 @@ def revert_claude_settings(claude_dir: Path) -> bool:
             copied["hooks"] = entry_hooks
             cleaned.append(copied)
 
-    if cleaned == pre_tool_use:
+    if cleaned == pre_tool_use and not changed_env:
         return False  # nothing to do
 
     if cleaned:
@@ -370,8 +389,8 @@ def revert_claude_settings(claude_dir: Path) -> bool:
 
     changed = _write_if_changed(settings_path, json.dumps(settings, indent=2) + "\n")
     if changed:
-        print(f"[OK] Removed delegation_guard hooks from {settings_path}")
-    return changed
+        print(f"[OK] Removed delegation hooks and env token from {settings_path}")
+    return changed or changed_env
 
 
 def create_antigravity_rule(project_dir: Path) -> Path:

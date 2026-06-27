@@ -12,6 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 import gemini_delegate
+import delegation_caller
 
 
 class FakeResult:
@@ -104,6 +105,92 @@ class TestAgyDelegate(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(calls, ["Gemini 3.1 Pro (High)"])
+
+
+class TestDetectCaller(unittest.TestCase):
+    """Tests for delegation_caller.detect_caller() — the layered harness detection."""
+
+    def _detect(self, env: dict) -> str:
+        with mock.patch.dict(os.environ, env, clear=True):
+            return delegation_caller.detect_caller()
+
+    def test_delegation_caller_token_wins_over_sniff(self):
+        # Explicit token takes priority even when Claude env vars are present
+        env = {"DELEGATION_CALLER": "codex", "CLAUDECODE": "1"}
+        self.assertEqual(self._detect(env), "codex")
+
+    def test_delegation_caller_token_invalid_falls_through_to_sniff(self):
+        # Invalid token → ignore token, fall through to sniff
+        env = {"DELEGATION_CALLER": "unknown_tool", "CLAUDECODE": "1"}
+        self.assertEqual(self._detect(env), "claude")
+
+    def test_claude_sniff_claudecode_var(self):
+        self.assertEqual(self._detect({"CLAUDECODE": "1"}), "claude")
+
+    def test_claude_sniff_entrypoint_var(self):
+        self.assertEqual(self._detect({"CLAUDE_CODE_ENTRYPOINT": "cli"}), "claude")
+
+    def test_claude_sniff_ai_agent_prefix(self):
+        self.assertEqual(self._detect({"AI_AGENT": "claude-code_2-1-195_agent"}), "claude")
+
+    def test_codex_sniff_codex_env_prefix(self):
+        self.assertEqual(self._detect({"CODEX_TASK_ID": "abc123"}), "codex")
+
+    def test_codex_sniff_ai_agent_prefix(self):
+        self.assertEqual(self._detect({"AI_AGENT": "codex-something"}), "codex")
+
+    def test_agy_sniff_antigravity_prefix(self):
+        self.assertEqual(self._detect({"ANTIGRAVITY_SESSION": "1"}), "agy")
+
+    def test_agy_sniff_agy_prefix(self):
+        self.assertEqual(self._detect({"AGY_MODEL": "gemini-flash"}), "agy")
+
+    def test_unknown_env_returns_empty_string(self):
+        self.assertEqual(self._detect({}), "")
+
+    def test_resolve_log_dir_auto_with_token_routes_correctly(self):
+        home = Path.home()
+        with mock.patch.dict(os.environ, {"DELEGATION_CALLER": "agy"}, clear=True):
+            result = delegation_caller.resolve_log_dir("auto", Path("/fallback"))
+        self.assertEqual(result, home / ".gemini" / "delegation-logs")
+
+    def test_resolve_log_dir_unknown_caller_writes_readme(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fallback = Path(tmpdir) / "metrics"
+            with mock.patch.dict(os.environ, {}, clear=True):
+                result = delegation_caller.resolve_log_dir("auto", fallback)
+            self.assertEqual(result, fallback)
+            readme = fallback / "README.txt"
+            self.assertTrue(readme.exists(), "README.txt should be written on fallback")
+            content = readme.read_text(encoding="utf-8")
+            self.assertIn("DELEGATION_CALLER", content)
+
+
+class TestResolveLogDir(unittest.TestCase):
+    """Routing table sourced from delegation_caller.CALLER_LOG_DIRS."""
+
+    def test_known_callers_map_to_harness_home(self):
+        home = Path.home()
+        self.assertEqual(
+            delegation_caller.resolve_log_dir("claude", Path("/fallback")),
+            home / ".claude" / "delegation-logs",
+        )
+        self.assertEqual(
+            delegation_caller.resolve_log_dir("codex", Path("/fallback")),
+            home / ".codex" / "delegation-logs",
+        )
+        self.assertEqual(
+            delegation_caller.resolve_log_dir("agy", Path("/fallback")),
+            home / ".gemini" / "delegation-logs",
+        )
+
+    def test_unknown_caller_uses_fallback(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fallback = Path(tmpdir) / "metrics"
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(delegation_caller.resolve_log_dir("unknown", fallback), fallback)
 
 
 class TestBackendSelection(unittest.TestCase):

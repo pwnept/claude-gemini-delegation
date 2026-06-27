@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("help", "install", "verify", "uninstall")]
+    [ValidateSet("help", "info", "install", "verify", "uninstall")]
     [string]$Command = "help",
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -16,6 +16,7 @@ claude-gemini-delegation
 
 Usage:
   .\install-delegation.ps1 help
+  .\install-delegation.ps1 info
   .\install-delegation.ps1 install --target "C:\path\to\repo"
   .\install-delegation.ps1 verify --target "C:\path\to\repo"
   .\install-delegation.ps1 uninstall --target "C:\path\to\repo"
@@ -93,6 +94,7 @@ try {
     }
 
     Invoke-DelegationCli -CliCommand $Command -CliArgs $RemainingArgs
+    # 'info' needs no --target; the Python CLI handles it directly.
 }
 catch {
     Write-Error @"

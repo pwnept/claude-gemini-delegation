@@ -30,14 +30,33 @@ def verify(args) -> int:
     )
 
 
+def info(args) -> int:  # noqa: ARG001
+    from . import __version__
+    from .installer import MANAGED_FILES
+
+    print(f"claude-gemini-delegation {__version__}")
+    print("\nManaged files (relative to install target):")
+    for f in MANAGED_FILES:
+        print(f"  {f}")
+    print("\nLog routing: DELEGATION_CALLER env token -> vendor sniff -> in-repo fallback")
+    print("Set in Claude Code: .claude/settings.json { \"env\": { \"DELEGATION_CALLER\": \"claude\" } }")
+    print("Set in Codex:       DELEGATION_CALLER=codex  (in Codex env config)")
+    print("Set in agy:         DELEGATION_CALLER=agy    (in agy env config)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gemini-delegate",
         description="Install local agy delegation hooks for Claude Code and Codex.",
     )
+    parser.add_argument("--version", action="version", version=_get_version())
     subparsers = parser.add_subparsers(dest="command")
     help_parser = subparsers.add_parser("help", help="Show this help text")
     help_parser.set_defaults(handler=lambda args: parser.print_help() or 0)
+
+    info_parser = subparsers.add_parser("info", help="Print version and managed-file contract (no --target needed)")
+    info_parser.set_defaults(handler=info)
 
     install_parser = subparsers.add_parser("install", help="Install local delegation files into a target repo")
     install_parser.add_argument("--target", required=True, help="Target repository directory")
@@ -67,10 +86,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _get_version() -> str:
+    try:
+        from . import __version__
+        return f"claude-gemini-delegation {__version__}"
+    except Exception:
+        return "claude-gemini-delegation (unknown version)"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command is None or args.command == "help":
+    if args.command is None or args.command == "help" or not hasattr(args, "handler"):
         parser.print_help()
         return 0
     try:

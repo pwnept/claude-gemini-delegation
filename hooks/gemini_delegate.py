@@ -92,6 +92,12 @@ LITE_MODELS = {"gemini-3.1-flash-lite", "gemini-2.5-flash-lite"}
 # and a new entry in this tuple.
 BACKENDS = ("agy", "gemini-cli", "gemini-api")
 
+# Caller detection and log-dir routing live in delegation_caller.py (shared
+# with post_delegate.py and analyze_metrics.py) to avoid dict duplication.
+# detect_caller() auto-detects the harness from DELEGATION_CALLER env token
+# (set by installer) with a vendor-env-sniff fallback.
+from delegation_caller import resolve_log_dir  # noqa: E402
+
 CAPACITY_PATTERNS = (
     "exhausted your capacity",
     "no capacity available",
@@ -105,6 +111,8 @@ CAPACITY_PATTERNS = (
     "currently experiencing", # gemini-cli "high demand" body text
     "terminalquotaerror",     # gemini-cli daily quota class
     "exhausted your daily",   # gemini-cli daily quota message
+    "retrying with backoff",  # gemini-cli WebSearchToolInvocation retry; kill before 5× backoff loop
+    "exceeded your current quota",  # gemini-cli search quota exhaustion message
 )
 
 
@@ -411,7 +419,7 @@ def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
 
     state_path = (
         Path(args.state_file) if args.state_file
-        else claude_dir / "metrics" / "gemini_api_model_state.json"
+        else resolve_log_dir(args.caller, claude_dir / "metrics") / "gemini_api_model_state.json"
     )
 
     def attempt(model: str) -> subprocess.CompletedProcess:
@@ -616,6 +624,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not save response to temp/ even if the directory exists.",
     )
+    parser.add_argument(
+        "--caller",
+        choices=("claude", "codex", "agy", "auto"),
+        default="auto",
+        help="Calling harness. State and metrics files go to its home delegation-logs/ dir. "
+             "Defaults to 'auto' which calls detect_caller() from delegation_caller.py.",
+    )
+    parser.add_argument(
+        "--agent-dir",
+        help="Path to the .gemini-delegation (or .claude/.codex) dir for this repo. "
+             "When provided, skips the cwd up-walk in find_agent_dir().",
+    )
     return parser.parse_args()
 
 
@@ -735,7 +755,8 @@ def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
         return 2
 
     state_path = (
-        Path(args.state_file) if args.state_file else claude_dir / "metrics" / "gemini_cli_model_state.json"
+        Path(args.state_file) if args.state_file
+        else resolve_log_dir(args.caller, claude_dir / "metrics") / "gemini_cli_model_state.json"
     )
 
     def attempt(model: str) -> subprocess.CompletedProcess:
@@ -774,7 +795,7 @@ def main() -> int:
         print("No prompt provided.", file=sys.stderr)
         return 2
 
-    claude_dir = find_agent_dir(Path.cwd())
+    claude_dir = Path(args.agent_dir) if args.agent_dir else find_agent_dir(Path.cwd())
 
     if backend == "gemini-cli":
         return run_cli_backend(prompt, args, claude_dir)
@@ -799,7 +820,10 @@ def main() -> int:
             print(error, file=sys.stderr)
         return 2
 
-    state_path = Path(args.state_file) if args.state_file else claude_dir / "metrics" / "agy_model_state.json"
+    state_path = (
+        Path(args.state_file) if args.state_file
+        else resolve_log_dir(args.caller, claude_dir / "metrics") / "agy_model_state.json"
+    )
     command = resolve_agy_command()
 
     def attempt(model: str) -> subprocess.CompletedProcess:
