@@ -6,6 +6,7 @@ metrics/
 temp/agy-*.md
 temp/gemini-*.md
 temp/delegation-uninstall-*.md
+agents/archive/delegation/
 
 # Dave code audit reports
 audit/

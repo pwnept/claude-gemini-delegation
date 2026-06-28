@@ -3,13 +3,17 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
+
+GITHUB_REPO = "pwnept/claude-gemini-delegation"
+_UPDATE_CHECK_INTERVAL = 86400  # seconds
 
 AGENTS_MARKER_BEGIN = "> [claude-gemini-delegation:agents-begin]"
 AGENTS_MARKER_END = "> [claude-gemini-delegation:agents-end]"
 MANAGED_FILES = (
+    ".gemini-delegation/hooks/delegation_caller.py",
     ".gemini-delegation/hooks/pre_delegate.py",
     ".gemini-delegation/hooks/gemini_delegate.py",
     ".gemini-delegation/hooks/post_delegate.py",
@@ -25,6 +29,7 @@ MANAGED_FILES = (
     ".claude/commands/delegate.md",
 )
 HOOK_FILES = (
+    "delegation_caller.py",
     "pre_delegate.py",
     "gemini_delegate.py",
     "post_delegate.py",
@@ -40,6 +45,62 @@ HOOK_FILES = (
 
 class InstallError(RuntimeError):
     """Expected installer error with user-actionable guidance."""
+
+
+def _parse_version(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.lstrip("v").split("."))
+    except ValueError:
+        return (0,)
+
+
+def check_for_update(config_path: Path) -> None:
+    """Query GitHub releases and print a hint if a newer version is available.
+
+    Reads/writes last_update_check in delegation_config.json.
+    Silently skips on any network or parse error.
+    """
+    import urllib.request
+
+    try:
+        config: dict = {}
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
+
+        now = datetime.now(tz=timezone.utc)
+        last_check = config.get("last_update_check")
+        if last_check:
+            try:
+                last_dt = datetime.fromisoformat(last_check)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                if (now - last_dt).total_seconds() < _UPDATE_CHECK_INTERVAL:
+                    return
+            except ValueError:
+                pass
+
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers={"User-Agent": "gemini-delegation-updater"})
+        with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode())
+
+        tag = data.get("tag_name", "")
+        if not tag:
+            return
+
+        from . import __version__
+        config["last_update_check"] = now.isoformat(timespec="seconds")
+        config["latest_release"] = tag
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+        if _parse_version(tag) > _parse_version(__version__):
+            print(f"[UPDATE] New release available: {tag} (current: {__version__})")
+            print(f"[UPDATE] pip install --upgrade git+https://github.com/{GITHUB_REPO}.git")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def source_root() -> Path:
@@ -143,6 +204,27 @@ def migrate_claude_instructions(project_dir: Path) -> str:
     migrated = []
     agents_md = project_dir / "AGENTS.md"
     existing_agents = _normalize_text(agents_md.read_text(encoding="utf-8")) if agents_md.exists() else ""
+
+    # If AGENTS.md already has user-authored content beyond our managed delegation block,
+    # skip migrating CLAUDE.md into it. Dumping CLAUDE.md content into a pre-existing
+    # AGENTS.md would mix instructions that may be intentionally per-agent (e.g. a repo
+    # where Claude and Codex see different rules). The delegation block is still added by
+    # ensure_agents_md; only the CLAUDE.md content dump is suppressed.
+    if agents_md.exists():
+        try:
+            without_our_block = replace_managed_section(existing_agents, "").strip()
+        except InstallError:
+            without_our_block = existing_agents.strip()
+        root_claude = project_dir / "CLAUDE.md"
+        root_claude_text = _normalize_text(root_claude.read_text(encoding="utf-8")).strip() if root_claude.exists() else ""
+        if without_our_block and root_claude_text == "@AGENTS.md":
+            return ""
+        if without_our_block:
+            print("[WARN] AGENTS.md already contains custom content.")
+            print("[WARN] Skipping CLAUDE.md migration to avoid mixing per-agent instructions.")
+            print("[WARN] CLAUDE.md was not modified. Use --preserve-claude-md to suppress this warning.")
+            return ""
+
     root_claude = project_dir / "CLAUDE.md"
     if root_claude.exists():
         content = root_claude.read_text(encoding="utf-8")
@@ -225,16 +307,20 @@ def copy_shared_hooks(project_dir: Path) -> Path:
         (dest_hooks / "delegate").chmod(0o755)
     except OSError:
         pass
+    config_path = project_dir / ".gemini-delegation" / "delegation_config.json"
+    existing_config: dict = {}
+    if config_path.exists():
+        try:
+            existing_config = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
     config = {
         "backend": "agy",
         "installed_by": "claude-gemini-delegation",
-        "installed_at": datetime.now().isoformat(timespec="seconds"),
+        "installed_at": existing_config.get("installed_at", datetime.now().isoformat(timespec="seconds")),
         "managed_markers": [AGENTS_MARKER_BEGIN, AGENTS_MARKER_END],
     }
-    (project_dir / ".gemini-delegation" / "delegation_config.json").write_text(
-        json.dumps(config, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_if_changed(config_path, json.dumps(config, indent=2) + "\n", backup_existing=False)
     print(f"[OK] Copied shared hooks to {dest_hooks}")
     return dest_hooks
 
@@ -285,6 +371,10 @@ def create_claude_settings(claude_dir: Path) -> Path:
     else:
         settings = {}
 
+    removed_archive_hooks = remove_stale_archive_jsonl_hooks(settings)
+    if removed_archive_hooks:
+        print(f"[OK] Removed {removed_archive_hooks} stale archive-jsonl hook(s) from {settings_path}")
+
     # Inject DELEGATION_CALLER so the hook auto-routes logs to ~/.claude/delegation-logs/
     # without needing an explicit -Caller argument (update-proof: we own this var).
     settings.setdefault("env", {})["DELEGATION_CALLER"] = "claude"
@@ -322,6 +412,75 @@ def create_claude_settings(claude_dir: Path) -> Path:
     _write_if_changed(settings_path, json.dumps(settings, indent=2) + "\n")
     print(f"[OK] Updated {settings_path}")
     return settings_path
+
+
+def remove_stale_archive_jsonl_hooks(settings: dict) -> int:
+    """Remove old absolute user-home archive-jsonl hooks from Claude settings.
+
+    These hooks were generated by an earlier non-portable setup and point at a
+    user-global path such as C:\\Users\\User\\.claude\\hooks\\archive-jsonl.ps1.
+    Preserve unrelated hooks and empty hook events.
+    """
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return 0
+
+    removed = 0
+    for event_name, entries in list(hooks.items()):
+        if not isinstance(entries, list):
+            continue
+
+        cleaned_entries = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                cleaned_entries.append(entry)
+                continue
+
+            entry_hooks = entry.get("hooks")
+            if not isinstance(entry_hooks, list):
+                cleaned_entries.append(entry)
+                continue
+
+            kept_hooks = []
+            for hook in entry_hooks:
+                if _is_stale_archive_jsonl_hook(hook):
+                    removed += 1
+                    continue
+                kept_hooks.append(hook)
+
+            if kept_hooks:
+                copied = dict(entry)
+                copied["hooks"] = kept_hooks
+                cleaned_entries.append(copied)
+
+        if cleaned_entries:
+            hooks[event_name] = cleaned_entries
+        else:
+            hooks.pop(event_name, None)
+
+    if not hooks:
+        settings.pop("hooks", None)
+    return removed
+
+
+def _is_stale_archive_jsonl_hook(hook: object) -> bool:
+    if not isinstance(hook, dict):
+        return False
+
+    parts = [str(hook.get("command", ""))]
+    args = hook.get("args")
+    if isinstance(args, list):
+        parts.extend(str(arg) for arg in args)
+
+    text = " ".join(parts).replace("/", "\\").lower()
+    if "archive-jsonl.ps1" not in text:
+        return False
+
+    return (
+        ":\\users\\" in text
+        or "\\.claude\\hooks\\archive-jsonl.ps1" in text
+        or "~\\.claude\\hooks\\archive-jsonl.ps1" in text
+    )
 
 
 def revert_claude_settings(claude_dir: Path) -> bool:
@@ -393,6 +552,99 @@ def revert_claude_settings(claude_dir: Path) -> bool:
     return changed or changed_env
 
 
+def create_codex_hooks(project_dir: Path) -> Path | None:
+    """Add PreToolUse delegation_guard hook to .codex/hooks.json.
+
+    Only runs when .codex/ already exists — never creates it from scratch.
+    Returns the path written, or None if .codex/ is absent.
+    """
+    codex_dir = get_codex_dir(project_dir)
+    if not codex_dir.exists():
+        return None
+
+    hooks_path = codex_dir / "hooks.json"
+    if hooks_path.exists():
+        try:
+            doc = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise InstallError(
+                f"Cannot parse {hooks_path}: {exc}\n"
+                "Fix the JSON manually or paste this error into an AI agent."
+            ) from exc
+    else:
+        doc = {"hooks": {}}
+
+    hooks = doc.setdefault("hooks", {})
+    pre_tool_use = hooks.get("PreToolUse", [])
+
+    def _is_guard(hook: dict) -> bool:
+        return "delegation_guard" in hook.get("command", "")
+
+    cleaned = []
+    for entry in pre_tool_use:
+        entry_hooks = [h for h in entry.get("hooks", []) if not _is_guard(h)]
+        if entry_hooks:
+            copied = dict(entry)
+            copied["hooks"] = entry_hooks
+            cleaned.append(copied)
+
+    guard_command = "pwsh -NoProfile -ExecutionPolicy Bypass -File .gemini-delegation/hooks/delegation_guard.ps1"
+    for matcher in ("Bash", "apply_patch"):
+        cleaned.append(
+            {
+                "matcher": matcher,
+                "hooks": [{"type": "command", "command": guard_command, "timeout": 5}],
+            }
+        )
+    hooks["PreToolUse"] = cleaned
+    _write_if_changed(hooks_path, json.dumps(doc, indent=2) + "\n")
+    print(f"[OK] Updated {hooks_path}")
+    return hooks_path
+
+
+def revert_codex_hooks(project_dir: Path) -> bool:
+    """Strip delegation_guard PreToolUse entries from .codex/hooks.json.
+
+    Returns True if the file was changed. Does not touch any other keys.
+    """
+    codex_dir = get_codex_dir(project_dir)
+    hooks_path = codex_dir / "hooks.json"
+    if not hooks_path.exists():
+        return False
+    try:
+        doc = json.loads(hooks_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+
+    pre_tool_use = doc.get("hooks", {}).get("PreToolUse", [])
+    if not pre_tool_use:
+        return False
+
+    def _is_guard(hook: dict) -> bool:
+        return "delegation_guard" in hook.get("command", "")
+
+    cleaned = []
+    for entry in pre_tool_use:
+        entry_hooks = [h for h in entry.get("hooks", []) if not _is_guard(h)]
+        if entry_hooks:
+            copied = dict(entry)
+            copied["hooks"] = entry_hooks
+            cleaned.append(copied)
+
+    if cleaned == pre_tool_use:
+        return False
+
+    if cleaned:
+        doc["hooks"]["PreToolUse"] = cleaned
+    else:
+        doc["hooks"].pop("PreToolUse", None)
+
+    changed = _write_if_changed(hooks_path, json.dumps(doc, indent=2) + "\n")
+    if changed:
+        print(f"[OK] Removed delegation guard from {hooks_path}")
+    return changed
+
+
 def create_antigravity_rule(project_dir: Path) -> Path:
     rule_path = project_dir / ".agents" / "rules" / "delegation.md"
     _write_if_changed(rule_path, antigravity_rule(), backup_existing=False)
@@ -425,7 +677,7 @@ def verify_install(target_dir: str, *, preserve_claude_md: bool = False) -> int:
     claude_md = project_dir / "CLAUDE.md"
     if not preserve_claude_md:
         claude_bridge = claude_md.read_text(encoding="utf-8").strip()
-        if claude_bridge != "@AGENTS.md":
+        if claude_bridge != "@AGENTS.md" and not _can_preserve_custom_claude_md(project_dir):
             raise InstallError("CLAUDE.md must contain exactly @AGENTS.md after migration.")
     else:
         if claude_md.exists() and claude_md.stat().st_size > 0:
@@ -462,7 +714,23 @@ def verify_install(target_dir: str, *, preserve_claude_md: bool = False) -> int:
             f"stderr:\n{probe.stderr}"
         )
     print(f"[OK] Verified delegation install in {project_dir}")
+    check_for_update(project_dir / ".gemini-delegation" / "delegation_config.json")
     return 0
+
+
+def _can_preserve_custom_claude_md(project_dir: Path) -> bool:
+    agents_md = project_dir / "AGENTS.md"
+    claude_md = project_dir / "CLAUDE.md"
+    if not agents_md.exists() or not claude_md.exists():
+        return False
+
+    try:
+        agents_text = _normalize_text(agents_md.read_text(encoding="utf-8"))
+        custom_agents_text = replace_managed_section(agents_text, "").strip()
+    except InstallError:
+        return False
+
+    return bool(custom_agents_text and _normalize_text(claude_md.read_text(encoding="utf-8")).strip())
 
 
 def install_hooks(
@@ -470,6 +738,7 @@ def install_hooks(
     target_dir: str = ".",
     create_target: bool = False,
     preserve_claude_md: bool = False,
+    no_update: bool = False,
 ) -> int:
     if scope != "local":
         raise InstallError(
@@ -477,6 +746,12 @@ def install_hooks(
             "Install locally into each target repo with: install --target <path>."
         )
     project_dir = resolve_target(target_dir, create=create_target)
+    if no_update and (project_dir / ".gemini-delegation" / "delegation_config.json").exists():
+        raise InstallError(
+            "Delegation is already installed in this repo.\n"
+            "Remove --no-update to refresh/update the existing install, "
+            "or run uninstall first for a clean re-install."
+        )
     if preserve_claude_md:
         print("[INFO] --preserve-claude-md: skipping CLAUDE.md migration.")
         migrated = ""
@@ -486,6 +761,7 @@ def install_hooks(
     copy_shared_hooks(project_dir)
     install_claude_command(project_dir)
     create_claude_settings(project_dir / ".claude")
+    create_codex_hooks(project_dir)
     create_antigravity_rule(project_dir)
     install_agents(project_dir)
     verify_install(str(project_dir), preserve_claude_md=preserve_claude_md)
@@ -589,6 +865,12 @@ def uninstall_hooks(scope: str = "local", target_dir: str = ".") -> int:
             removed.append(str(project_dir / ".claude/settings.json (delegation_guard hooks removed)"))
     except (OSError, InstallError) as exc:
         failures.append(f".claude/settings.json revert: {exc}")
+
+    try:
+        if revert_codex_hooks(project_dir):
+            removed.append(str(project_dir / ".codex/hooks.json (delegation_guard hooks removed)"))
+    except (OSError, InstallError) as exc:
+        failures.append(f".codex/hooks.json revert: {exc}")
 
     try:
         if remove_agents_md_section(project_dir):

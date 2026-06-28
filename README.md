@@ -18,6 +18,10 @@ cd claude-gemini-delegation
 .\install-delegation.ps1 install --target "C:\path\to\target-repo"
 ```
 
+Re-running `install` on an already-installed repo is safe — it refreshes hook files and
+updates the AGENTS.md delegation block without touching user-authored content. Pass
+`--no-update` to error instead if you want to guard against accidental re-installs.
+
 Verify an existing target install:
 
 ```powershell

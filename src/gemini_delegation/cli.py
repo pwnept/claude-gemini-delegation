@@ -12,6 +12,7 @@ def install(args) -> int:
         target_dir=args.target,
         create_target=args.create_target,
         preserve_claude_md=getattr(args, "preserve_claude_md", False),
+        no_update=getattr(args, "no_update", False),
     )
 
 
@@ -67,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Skip CLAUDE.md migration. Use when the repo has a hand-authored CLAUDE.md "
             "that already imports @AGENTS.md on line 1."
         ),
+    )
+    install_parser.add_argument(
+        "--no-update",
+        action="store_true",
+        dest="no_update",
+        help="Fail if delegation is already installed. Useful for CI or scripted first-time installs.",
     )
     install_parser.set_defaults(handler=install)
 

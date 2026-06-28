@@ -64,7 +64,7 @@ class TestAgyDelegate(unittest.TestCase):
                 return FakeResult(1, stderr="No capacity available for model flash on the server")
             return FakeResult(0, stdout="ok from lite\n")
 
-        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--models", "flash,lite", "--no-state", "hello"]):
+        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--models", "flash,lite", "--no-state", "--no-save", "hello"]):
             with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
                 with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
                     with mock.patch.object(sys.stdout, "write") as write:
@@ -81,7 +81,7 @@ class TestAgyDelegate(unittest.TestCase):
             calls.append(model)
             return FakeResult(0, stdout="ok\n")
 
-        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--no-state", "hello"]):
+        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--no-state", "--no-save", "hello"]):
             with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
                 with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
                     with mock.patch.object(sys.stdout, "write"):
@@ -97,7 +97,7 @@ class TestAgyDelegate(unittest.TestCase):
             calls.append(model)
             return FakeResult(0, stdout="ok\n")
 
-        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--profile", "research", "--no-state", "hello"]):
+        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--profile", "research", "--no-state", "--no-save", "hello"]):
             with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
                 with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
                     with mock.patch.object(sys.stdout, "write"):
@@ -235,7 +235,7 @@ class TestGeminiCliBackend(unittest.TestCase):
 
         argv = [
             "gemini_delegate.py", "--backend", "gemini-cli",
-            "--models", "gemini-3-flash-preview,gemini-2.5-flash", "--no-state", "hello",
+            "--models", "gemini-3-flash-preview,gemini-2.5-flash", "--no-state", "--no-save", "hello",
         ]
         with mock.patch.object(sys, "argv", argv):
             with mock.patch.object(gemini_delegate, "run_gemini_cli", side_effect=fake_run):
@@ -270,7 +270,7 @@ class TestGeminiCliBackend(unittest.TestCase):
 
         argv = [
             "gemini_delegate.py", "--backend", "gemini-cli",
-            "--models", "model-a,model-b", "--no-state", "hello",
+            "--models", "model-a,model-b", "--no-state", "--no-save", "hello",
         ]
         with mock.patch.object(sys, "argv", argv):
             with mock.patch.object(gemini_delegate, "run_gemini_cli", side_effect=fake_run):
@@ -290,7 +290,7 @@ class TestGeminiCliBackend(unittest.TestCase):
                 args=["gemini", "--model", model], returncode=0, stdout="ok\n", stderr="",
             )
 
-        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--backend", "gemini-cli", "--no-state", "hello"]):
+        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--backend", "gemini-cli", "--no-state", "--no-save", "hello"]):
             with mock.patch.object(gemini_delegate, "run_gemini_cli", side_effect=fake_run):
                 with mock.patch.object(sys.stdout, "write"):
                     gemini_delegate.main()
@@ -320,7 +320,7 @@ class TestGeminiApiBackend(unittest.TestCase):
 
         argv = [
             "gemini_delegate.py", "--backend", "gemini-api",
-            "--models", "gemini-3-flash,gemini-3.5-flash", "--no-state", "hello",
+            "--models", "gemini-3-flash,gemini-3.5-flash", "--no-state", "--no-save", "hello",
         ]
         with mock.patch.object(sys, "argv", argv):
             with mock.patch.object(gemini_delegate, "call_gemini_api", side_effect=fake_call):

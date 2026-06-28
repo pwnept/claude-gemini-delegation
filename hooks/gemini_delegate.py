@@ -432,7 +432,10 @@ def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
             )
         return call_gemini_api(model, prompt, timeout=args.timeout_seconds)
 
-    return run_with_fallback(models, state_path, args, attempt)
+    def _on_success(output: str, model: str) -> None:
+        _save_delegation_transcript(prompt, output, model, claude_dir)
+
+    return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 
 
 _ANSI_RE = re.compile(
@@ -549,20 +552,55 @@ def run_agy(
     )
 
 
-def _try_save_response(output: str, model: str) -> None:
-    """Save response to temp/ in cwd if that directory exists."""
-    temp_dir = Path.cwd() / "temp"
-    if not temp_dir.is_dir():
-        return
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    out_path = temp_dir / f"agy-{ts}.md"
+def _save_delegation_transcript(prompt: str, output: str, model: str, agent_dir: Path) -> None:
+    """Write prompt+response as one .md file per delegation call.
+
+    Saves to AGENTS/archive/delegation/{agent}-{session-id}/ using session
+    context written by Invoke-AgentArchiveHook.ps1 at session start. Falls
+    back to temp/ in cwd when the archive path cannot be created.
+    """
     try:
-        with out_path.open("w", encoding="utf-8") as f:
-            f.write(f"<!-- model: {model} -->\n")
-            f.write(output)
-        print(f"[Saved to: {out_path}]", file=sys.stderr)
+        repo_root = agent_dir.parent
+        session_file = agent_dir / ".caller-session.json"
+        session_id = "no-session"
+        agent = "unknown"
+        if session_file.exists():
+            try:
+                ctx = json.loads(session_file.read_text(encoding="utf-8"))
+                session_id = ctx.get("session_id", "no-session")
+                agent = ctx.get("agent", "unknown")
+            except Exception:  # noqa: BLE001
+                pass
+
+        safe_id = re.sub(r'[\\/:*?"<>|]', "_", str(session_id))
+        session_dir = repo_root / "AGENTS" / "archive" / "delegation" / f"{agent}-{safe_id}"
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        dest = session_dir / f"delegation-{ts}.md"
+        dest.write_text(
+            f"<!-- model: {model} -->\n"
+            f"<!-- delegation-prompt-begin -->\n{prompt}\n<!-- delegation-prompt-end -->\n\n"
+            f"<!-- delegation-response-begin -->\n{output}\n<!-- delegation-response-end -->\n",
+            encoding="utf-8",
+        )
+        print(f"[Saved to: {dest}]", file=sys.stderr)
     except OSError:
-        pass
+        temp_dir = Path.cwd() / "temp"
+        if not temp_dir.is_dir():
+            return
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        out_path = temp_dir / f"delegation-{ts}.md"
+        try:
+            out_path.write_text(
+                f"<!-- model: {model} -->\n"
+                f"<!-- delegation-prompt-begin -->\n{prompt}\n<!-- delegation-prompt-end -->\n\n"
+                f"<!-- delegation-response-begin -->\n{output}\n<!-- delegation-response-end -->\n",
+                encoding="utf-8",
+            )
+            print(f"[Saved to: {out_path}]", file=sys.stderr)
+        except OSError:
+            pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -639,13 +677,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, attempt) -> int:
+def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, attempt, *, on_success=None) -> int:
     """Try `models` in order via `attempt(model)`, applying capacity cooldowns.
 
     `attempt(model)` returns a subprocess.CompletedProcess-shaped result and
     may raise subprocess.TimeoutExpired. Shared by every backend (agy,
     gemini-api, ...) so they all get the same fallback/cooldown/state-file
     behavior for free.
+
+    `on_success(output, model)` is called once on the first successful response
+    (respects --no-save).
     """
     state = {"cooldowns": {}} if args.no_state else load_state(state_path)
     now = time.time()
@@ -696,8 +737,8 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
         if (result.returncode == 0 or node_crash) and output:
             if args.show_model:
                 print("Model used: {0}".format(model), file=sys.stderr)
-            if not args.no_save:
-                _try_save_response(output, model)
+            if not args.no_save and on_success:
+                on_success(output, model)
             sys.stdout.write(output)
             if not args.no_state:
                 state.setdefault("cooldowns", {}).pop(model, None)
@@ -769,7 +810,10 @@ def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
             )
         return run_gemini_cli(model, prompt, timeout=args.timeout_seconds)
 
-    return run_with_fallback(models, state_path, args, attempt)
+    def _on_success(output: str, model: str) -> None:
+        _save_delegation_transcript(prompt, output, model, claude_dir)
+
+    return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 
 
 def main() -> int:
@@ -833,7 +877,10 @@ def main() -> int:
             idle_timeout=args.idle_timeout_seconds,
         )
 
-    return run_with_fallback(models, state_path, args, attempt)
+    def _on_success(output: str, model: str) -> None:
+        _save_delegation_transcript(prompt, output, model, claude_dir)
+
+    return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 
 
 if __name__ == "__main__":

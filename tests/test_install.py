@@ -1,8 +1,11 @@
+import io
 import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -12,6 +15,7 @@ from gemini_delegation.installer import (  # noqa: E402
     AGENTS_MARKER_END,
     InstallError,
     agents_section,
+    check_for_update,
     create_claude_command,
     create_claude_settings,
     get_codex_dir,
@@ -172,6 +176,78 @@ class TestDelegationCallerToken(unittest.TestCase):
             settings = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
             self.assertNotIn("DELEGATION_CALLER", settings.get("env", {}))
             self.assertEqual(settings["env"]["MY_VAR"], "keep")
+
+
+class TestAgentsMdContentGuard(unittest.TestCase):
+    def test_install_warns_and_skips_migration_when_agents_md_has_content(self):
+        """If AGENTS.md already has user content, CLAUDE.md must not be touched."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            original_claude = "# Claude-only rules\nDo not share with Codex.\n"
+            (project_dir / "CLAUDE.md").write_text(original_claude, encoding="utf-8")
+            (project_dir / "AGENTS.md").write_text(
+                "# Shared agent instructions\nBoth Claude and Codex see this.\n",
+                encoding="utf-8",
+            )
+
+            import io
+            from contextlib import redirect_stdout
+            out = io.StringIO()
+            with redirect_stdout(out):
+                install_hooks(target_dir=tmpdir)
+
+            # CLAUDE.md must be untouched
+            self.assertEqual(
+                (project_dir / "CLAUDE.md").read_text(encoding="utf-8"),
+                original_claude,
+            )
+            # Warning must be printed
+            self.assertIn("WARN", out.getvalue())
+            self.assertIn("AGENTS.md", out.getvalue())
+            # Delegation block was still added to AGENTS.md
+            agents_text = (project_dir / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn(AGENTS_MARKER_BEGIN, agents_text)
+
+    def test_install_proceeds_normally_when_agents_md_is_empty(self):
+        """Empty AGENTS.md must not trigger the guard."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            (project_dir / "CLAUDE.md").write_text("# Rules\nKeep.\n", encoding="utf-8")
+            (project_dir / "AGENTS.md").write_text("", encoding="utf-8")
+
+            result = install_hooks(target_dir=tmpdir)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                (project_dir / "CLAUDE.md").read_text(encoding="utf-8"), "@AGENTS.md\n"
+            )
+
+    def test_reinstall_does_not_trigger_guard(self):
+        """Re-running install after initial install must not produce spurious warnings."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            install_hooks(target_dir=tmpdir)
+
+            import io
+            from contextlib import redirect_stdout
+            out = io.StringIO()
+            with redirect_stdout(out):
+                result = install_hooks(target_dir=tmpdir)
+
+            self.assertEqual(result, 0)
+            self.assertNotIn("WARN", out.getvalue())
+
+
+class TestNoUpdateFlag(unittest.TestCase):
+    def test_no_update_errors_if_already_installed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            install_hooks(target_dir=tmpdir)
+            with self.assertRaises(InstallError):
+                install_hooks(target_dir=tmpdir, no_update=True)
+
+    def test_no_update_succeeds_on_fresh_install(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = install_hooks(target_dir=tmpdir, no_update=True)
+            self.assertEqual(result, 0)
 
 
 class TestRevertClaudeSettings(unittest.TestCase):
@@ -370,6 +446,57 @@ class TestManagedDocuments(unittest.TestCase):
             self.assertEqual(sum(".gemini-delegation/hooks/delegation_guard.ps1" in command for command in commands), 2)
             self.assertFalse(any("delegation_guard.py" in command for command in commands))
 
+    def test_create_claude_settings_removes_stale_absolute_archive_hooks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            claude_dir = Path(tmpdir) / ".claude"
+            claude_dir.mkdir()
+            settings_path = claude_dir / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "hooks": {
+                            "Stop": [
+                                {
+                                    "matcher": ".*",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": "powershell.exe",
+                                            "args": [
+                                                "-File",
+                                                "C:\\Users\\User\\.claude\\hooks\\archive-jsonl.ps1",
+                                            ],
+                                        },
+                                        {"type": "command", "command": "echo keep"},
+                                    ],
+                                }
+                            ],
+                            "SessionEnd": [
+                                {
+                                    "matcher": ".*",
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": "powershell.exe",
+                                            "args": ["-File", "C:\\Users\\User\\.claude\\hooks\\archive-jsonl.ps1"],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            create_claude_settings(claude_dir)
+
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            serialized = json.dumps(settings)
+            self.assertNotIn("archive-jsonl.ps1", serialized)
+            self.assertIn("echo keep", serialized)
+            self.assertNotIn("SessionEnd", settings.get("hooks", {}))
+
     def test_migrates_legacy_codex_casing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
@@ -382,6 +509,76 @@ class TestManagedDocuments(unittest.TestCase):
             self.assertTrue(codex_dir.is_dir())
             self.assertIn(".codex", child_names)
             self.assertNotIn(".Codex", child_names)
+
+
+class TestCheckForUpdate(unittest.TestCase):
+    def _make_urlopen(self, tag: str):
+        payload = json.dumps({"tag_name": tag}).encode()
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = payload
+        return MagicMock(return_value=mock_resp)
+
+    def test_prints_update_notice_when_newer_release_available(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "delegation_config.json"
+            config_path.write_text(json.dumps({}), encoding="utf-8")
+
+            with patch("urllib.request.urlopen", self._make_urlopen("v99.0.0")):
+                with patch("builtins.print") as mock_print:
+                    check_for_update(config_path)
+
+            printed = " ".join(str(c) for c in (call.args[0] for call in mock_print.call_args_list))
+            self.assertIn("[UPDATE]", printed)
+            self.assertIn("v99.0.0", printed)
+
+    def test_no_notice_when_already_on_latest(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "delegation_config.json"
+            config_path.write_text(json.dumps({}), encoding="utf-8")
+
+            with patch("urllib.request.urlopen", self._make_urlopen("v0.0.1")):
+                with patch("builtins.print") as mock_print:
+                    check_for_update(config_path)
+
+            printed = " ".join(str(c) for c in (call.args[0] for call in mock_print.call_args_list))
+            self.assertNotIn("[UPDATE]", printed)
+
+    def test_skips_check_within_24h(self):
+        from datetime import timezone
+        recent = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "delegation_config.json"
+            config_path.write_text(
+                json.dumps({"last_update_check": recent}), encoding="utf-8"
+            )
+
+            with patch("urllib.request.urlopen") as mock_urlopen:
+                check_for_update(config_path)
+
+            mock_urlopen.assert_not_called()
+
+    def test_stores_last_check_and_tag_in_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "delegation_config.json"
+            config_path.write_text(json.dumps({"installed_by": "test"}), encoding="utf-8")
+
+            with patch("urllib.request.urlopen", self._make_urlopen("v99.0.0")):
+                check_for_update(config_path)
+
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertIn("last_update_check", config)
+            self.assertEqual(config["latest_release"], "v99.0.0")
+            self.assertEqual(config["installed_by"], "test")  # unrelated keys preserved
+
+    def test_silently_survives_network_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "delegation_config.json"
+            config_path.write_text(json.dumps({}), encoding="utf-8")
+
+            with patch("urllib.request.urlopen", side_effect=OSError("no network")):
+                check_for_update(config_path)  # must not raise
 
 
 if __name__ == "__main__":
