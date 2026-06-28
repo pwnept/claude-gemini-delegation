@@ -31,10 +31,9 @@ def verify(args) -> int:
 
 
 def info(args) -> int:  # noqa: ARG001
-    from . import __version__
     from .installer import MANAGED_FILES
 
-    print(f"claude-gemini-delegation {__version__}")
+    print(_get_version())
     print("\nManaged files (relative to install target):")
     for f in MANAGED_FILES:
         print(f"  {f}")
@@ -89,9 +88,22 @@ def build_parser() -> argparse.ArgumentParser:
 def _get_version() -> str:
     try:
         from . import __version__
-        return f"claude-gemini-delegation {__version__}"
+        version_str = f"claude-gemini-delegation {__version__}"
     except Exception:
-        return "claude-gemini-delegation (unknown version)"
+        version_str = "claude-gemini-delegation (unknown version)"
+    try:
+        import subprocess
+        from pathlib import Path
+        pkg_root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=5, cwd=pkg_root,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            version_str += f" ({result.stdout.strip()})"
+    except Exception:
+        pass
+    return version_str
 
 
 def main(argv: list[str] | None = None) -> int:
