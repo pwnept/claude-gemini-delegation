@@ -5,6 +5,7 @@ Run with: python3 -m unittest discover tests
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -105,6 +106,74 @@ class TestAgyDelegate(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(calls, ["Gemini 3.1 Pro (High)"])
+
+
+class TestDelegationTranscriptLogs(unittest.TestCase):
+    def test_save_delegation_transcript_writes_one_user_home_txt_per_call(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            agent_dir = root / "repo" / ".gemini-delegation"
+            agent_dir.mkdir(parents=True)
+            (agent_dir / ".caller-session.json").write_text(
+                json_text(
+                    {
+                        "agent": "codex",
+                        "session_id": "2026/06/29/session.jsonl",
+                        "transcript_path": str(Path("C:/Users/User/.codex/sessions/2026/06/29/session.jsonl")),
+                        "turn_id": "turn-7",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = mock.Mock(caller="auto", profile="research")
+
+            with mock.patch.dict(os.environ, {"DELEGATION_LOG_ROOT": str(root / "home")}, clear=True):
+                first = gemini_delegate._save_delegation_transcript(
+                    "prompt text", "output text", "model-a", agent_dir, args, "agy"
+                )
+                second = gemini_delegate._save_delegation_transcript(
+                    "prompt text", "output text 2", "model-a", agent_dir, args, "agy"
+                )
+
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            self.assertEqual(first.suffix, ".txt")
+            self.assertEqual(second.name, "turn-7_0002.txt")
+            self.assertIn("runs", first.parts)
+            self.assertIn("codex", first.parts)
+            self.assertIn("repo", first.parts[-3])
+            self.assertEqual(first.parent.name, "session_gemini_delegation")
+            content = first.read_text(encoding="utf-8")
+            self.assertIn("backend: agy", content)
+            self.assertIn("profile: research", content)
+            self.assertIn("model: model-a", content)
+            self.assertIn("=== PROMPT ===\nprompt text", content)
+            self.assertIn("=== OUTPUT ===\noutput text", content)
+
+    def test_save_delegation_transcript_respects_disable_env(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            agent_dir = root / "repo" / ".gemini-delegation"
+            agent_dir.mkdir(parents=True)
+            args = mock.Mock(caller="codex", profile="default")
+
+            with mock.patch.dict(
+                os.environ,
+                {"DELEGATION_LOG_ROOT": str(root / "home"), "DELEGATION_DISABLE_LOGS": "1"},
+                clear=True,
+            ):
+                result = gemini_delegate._save_delegation_transcript(
+                    "prompt", "output", "model", agent_dir, args, "agy"
+                )
+
+            self.assertIsNone(result)
+            self.assertFalse((root / "home").exists())
+
+
+def json_text(value: dict) -> str:
+    import json
+
+    return json.dumps(value)
 
 
 class TestDetectCaller(unittest.TestCase):

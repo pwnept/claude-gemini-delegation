@@ -96,7 +96,7 @@ BACKENDS = ("agy", "gemini-cli", "gemini-api")
 # with post_delegate.py and analyze_metrics.py) to avoid dict duplication.
 # detect_caller() auto-detects the harness from DELEGATION_CALLER env token
 # (set by installer) with a vendor-env-sniff fallback.
-from delegation_caller import resolve_log_dir  # noqa: E402
+from delegation_caller import detect_caller, resolve_log_dir  # noqa: E402
 
 CAPACITY_PATTERNS = (
     "exhausted your capacity",
@@ -433,7 +433,7 @@ def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
         return call_gemini_api(model, prompt, timeout=args.timeout_seconds)
 
     def _on_success(output: str, model: str) -> None:
-        _save_delegation_transcript(prompt, output, model, claude_dir)
+        _save_delegation_transcript(prompt, output, model, claude_dir, args, "gemini-api")
 
     return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 
@@ -552,55 +552,138 @@ def run_agy(
     )
 
 
-def _save_delegation_transcript(prompt: str, output: str, model: str, agent_dir: Path) -> None:
-    """Write prompt+response as one .md file per delegation call.
+def _safe_path_part(value: object, default: str = "unknown") -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = default
+    text = re.sub(r'[\\/:*?"<>|\s]+', "-", text)
+    text = re.sub(r"-+", "-", text).strip("-._")
+    return text or default
 
-    Saves to AGENTS/archive/delegation/{agent}-{session-id}/ using session
-    context written by Invoke-AgentArchiveHook.ps1 at session start. Falls
-    back to temp/ in cwd when the archive path cannot be created.
-    """
+
+def _project_slug(project_root: Path) -> str:
+    try:
+        resolved = project_root.resolve()
+    except OSError:
+        resolved = project_root
+
+    parts = [part for part in resolved.parts if part not in ("\\", "/")]
+    if parts and parts[0].endswith(":"):
+        parts[0] = parts[0][:-1]
+    cleaned = [_safe_path_part(part) for part in parts if _safe_path_part(part)]
+    return "--".join(cleaned) or _safe_path_part(resolved.name, "project")
+
+
+def _load_caller_session(agent_dir: Path) -> dict:
+    session_file = agent_dir / ".caller-session.json"
+    if not session_file.exists():
+        return {}
+    try:
+        data = json.loads(session_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _caller_name(args: argparse.Namespace, context: dict) -> str:
+    if args.caller and args.caller != "auto":
+        return args.caller
+    context_agent = str(context.get("agent", "")).strip().lower()
+    if context_agent:
+        return context_agent
+    detected = detect_caller()
+    return detected or "unknown"
+
+
+def _session_slug(context: dict) -> str:
+    transcript_path = str(context.get("transcript_path", "")).strip()
+    if transcript_path:
+        return _safe_path_part(Path(transcript_path).stem, "unknown-session")
+    return _safe_path_part(context.get("session_id"), "unknown-session")
+
+
+def _turn_slug(context: dict) -> str:
+    return _safe_path_part(
+        context.get("turn_id") or os.environ.get("DELEGATION_TURN_ID"),
+        "turn-unknown",
+    )
+
+
+def _delegation_log_root() -> Path:
+    configured = os.environ.get("DELEGATION_LOG_ROOT")
+    if configured:
+        return Path(os.path.expandvars(os.path.expanduser(configured)))
+    return Path.home() / ".gemini_delegation"
+
+
+def _write_numbered_delegation_log(log_dir: Path, turn_slug: str, content: str) -> Path:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    for number in range(1, 10000):
+        candidate = log_dir / f"{turn_slug}_{number:04d}.txt"
+        try:
+            with candidate.open("x", encoding="utf-8") as handle:
+                handle.write(content)
+            return candidate
+        except FileExistsError:
+            continue
+    raise OSError(f"Could not allocate delegation log file in {log_dir}")
+
+
+def _save_delegation_transcript(
+    prompt: str,
+    output: str,
+    model: str,
+    agent_dir: Path,
+    args: argparse.Namespace,
+    backend: str,
+) -> Path | None:
+    """Write prompt+response as one user-home .txt file per delegation call."""
+    if os.environ.get("DELEGATION_DISABLE_LOGS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return None
+
     try:
         repo_root = agent_dir.parent
-        session_file = agent_dir / ".caller-session.json"
-        session_id = "no-session"
-        agent = "unknown"
-        if session_file.exists():
-            try:
-                ctx = json.loads(session_file.read_text(encoding="utf-8"))
-                session_id = ctx.get("session_id", "no-session")
-                agent = ctx.get("agent", "unknown")
-            except Exception:  # noqa: BLE001
-                pass
-
-        safe_id = re.sub(r'[\\/:*?"<>|]', "_", str(session_id))
-        session_dir = repo_root / "AGENTS" / "archive" / "delegation" / f"{agent}-{safe_id}"
-        session_dir.mkdir(parents=True, exist_ok=True)
-
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        dest = session_dir / f"delegation-{ts}.md"
-        dest.write_text(
-            f"<!-- model: {model} -->\n"
-            f"<!-- delegation-prompt-begin -->\n{prompt}\n<!-- delegation-prompt-end -->\n\n"
-            f"<!-- delegation-response-begin -->\n{output}\n<!-- delegation-response-end -->\n",
-            encoding="utf-8",
+        context = _load_caller_session(agent_dir)
+        caller = _safe_path_part(_caller_name(args, context))
+        project_slug = _project_slug(repo_root)
+        session_slug = _session_slug(context)
+        turn_slug = _turn_slug(context)
+        log_dir = (
+            _delegation_log_root()
+            / "runs"
+            / caller
+            / project_slug
+            / f"{session_slug}_gemini_delegation"
         )
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        content = "\n".join(
+            [
+                "delegation_log_version: 1",
+                f"timestamp_utc: {timestamp}",
+                f"caller: {caller}",
+                f"project_path: {repo_root}",
+                f"project_slug: {project_slug}",
+                f"session_id: {context.get('session_id', 'unknown-session')}",
+                f"session_slug: {session_slug}",
+                f"turn_id: {context.get('turn_id') or os.environ.get('DELEGATION_TURN_ID') or 'turn-unknown'}",
+                f"backend: {backend}",
+                f"profile: {args.profile}",
+                f"model: {model}",
+                "exit_status: 0",
+                "",
+                "=== PROMPT ===",
+                prompt,
+                "",
+                "=== OUTPUT ===",
+                output,
+            ]
+        )
+        dest = _write_numbered_delegation_log(log_dir, turn_slug, content)
         print(f"[Saved to: {dest}]", file=sys.stderr)
-    except OSError:
-        temp_dir = Path.cwd() / "temp"
-        if not temp_dir.is_dir():
-            return
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        out_path = temp_dir / f"delegation-{ts}.md"
-        try:
-            out_path.write_text(
-                f"<!-- model: {model} -->\n"
-                f"<!-- delegation-prompt-begin -->\n{prompt}\n<!-- delegation-prompt-end -->\n\n"
-                f"<!-- delegation-response-begin -->\n{output}\n<!-- delegation-response-end -->\n",
-                encoding="utf-8",
-            )
-            print(f"[Saved to: {out_path}]", file=sys.stderr)
-        except OSError:
-            pass
+        return dest
+    except OSError as exc:
+        print(f"[WARN] Could not save delegation transcript: {exc}", file=sys.stderr)
+        return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -811,7 +894,7 @@ def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
         return run_gemini_cli(model, prompt, timeout=args.timeout_seconds)
 
     def _on_success(output: str, model: str) -> None:
-        _save_delegation_transcript(prompt, output, model, claude_dir)
+        _save_delegation_transcript(prompt, output, model, claude_dir, args, "gemini-cli")
 
     return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 
@@ -878,7 +961,7 @@ def main() -> int:
         )
 
     def _on_success(output: str, model: str) -> None:
-        _save_delegation_transcript(prompt, output, model, claude_dir)
+        _save_delegation_transcript(prompt, output, model, claude_dir, args, "agy")
 
     return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 

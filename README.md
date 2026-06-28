@@ -119,12 +119,13 @@ migrated into `AGENTS.md`, backed up, and removed.
 This keeps Claude Code, Codex, and Antigravity reading the same project-level
 delegation policy.
 
-Use `--preserve-claude-md` when the target has a hand-authored `CLAUDE.md` that
-already imports `@AGENTS.md` on line 1. The migration is skipped and the file
-is left untouched:
+If the target already has user-authored `AGENTS.md` content, the installer
+preserves `CLAUDE.md` automatically and only refreshes the managed delegation
+block. Use `--preserve-claude-md` only when you explicitly want to skip Claude
+instruction migration in a repo without shared `AGENTS.md` content:
 
 ```powershell
-.\install-delegation.ps1 install --target "F:\EDFN" --preserve-claude-md
+.\install-delegation.ps1 install --target "F:\SomeRepo" --preserve-claude-md
 ```
 
 ## Expected Delegate Commands
@@ -151,6 +152,20 @@ $prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 
 Or use the `/delegate` slash-command in Claude Code, which runs the same
 `delegate_and_log.ps1` via `.claude/commands/delegate.md`.
+
+## Delegate Transcript Logs
+
+Each successful delegate call writes one full prompt/output `.txt` transcript
+under user-home by default:
+
+```text
+~/.gemini_delegation/runs/<caller>/<project-slug>/<session-slug>_gemini_delegation/<turn-id>_<delegation-number>.txt
+```
+
+This keeps full AI-use artifacts out of target repos unless that repo chooses
+to copy them into its own archive hook. Set `DELEGATION_LOG_ROOT` to override
+the root directory, or `DELEGATION_DISABLE_LOGS=1` to disable transcript writes
+for tests and special cases.
 
 ## Choosing A Backend
 

@@ -220,9 +220,7 @@ def migrate_claude_instructions(project_dir: Path) -> str:
         if without_our_block and root_claude_text == "@AGENTS.md":
             return ""
         if without_our_block:
-            print("[WARN] AGENTS.md already contains custom content.")
-            print("[WARN] Skipping CLAUDE.md migration to avoid mixing per-agent instructions.")
-            print("[WARN] CLAUDE.md was not modified. Use --preserve-claude-md to suppress this warning.")
+            print("[OK] Preserved CLAUDE.md because AGENTS.md already has custom content.")
             return ""
 
     root_claude = project_dir / "CLAUDE.md"

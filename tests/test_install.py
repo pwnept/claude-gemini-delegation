@@ -179,7 +179,7 @@ class TestDelegationCallerToken(unittest.TestCase):
 
 
 class TestAgentsMdContentGuard(unittest.TestCase):
-    def test_install_warns_and_skips_migration_when_agents_md_has_content(self):
+    def test_install_preserves_claude_md_when_agents_md_has_content(self):
         """If AGENTS.md already has user content, CLAUDE.md must not be touched."""
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
@@ -201,8 +201,9 @@ class TestAgentsMdContentGuard(unittest.TestCase):
                 (project_dir / "CLAUDE.md").read_text(encoding="utf-8"),
                 original_claude,
             )
-            # Warning must be printed
-            self.assertIn("WARN", out.getvalue())
+            # Preservation is expected and should not require --preserve-claude-md.
+            self.assertNotIn("WARN", out.getvalue())
+            self.assertIn("Preserved CLAUDE.md", out.getvalue())
             self.assertIn("AGENTS.md", out.getvalue())
             # Delegation block was still added to AGENTS.md
             agents_text = (project_dir / "AGENTS.md").read_text(encoding="utf-8")
