@@ -12,7 +12,6 @@ def install(args) -> int:
         target_dir=args.target,
         create_target=args.create_target,
         preserve_claude_md=getattr(args, "preserve_claude_md", False),
-        no_update=getattr(args, "no_update", False),
     )
 
 
@@ -20,6 +19,16 @@ def uninstall(args) -> int:
     from .installer import uninstall_hooks
 
     return uninstall_hooks(target_dir=args.target)
+
+
+def update(args) -> int:
+    from .installer import install_hooks, uninstall_hooks
+
+    uninstall_hooks(target_dir=args.target)
+    return install_hooks(
+        target_dir=args.target,
+        preserve_claude_md=getattr(args, "preserve_claude_md", False),
+    )
 
 
 def verify(args) -> int:
@@ -58,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     info_parser = subparsers.add_parser("info", help="Print version and managed-file contract (no --target needed)")
     info_parser.set_defaults(handler=info)
 
-    install_parser = subparsers.add_parser("install", help="Install local delegation files into a target repo")
+    install_parser = subparsers.add_parser("install", help="First-time install into a target repo (fails if already installed)")
     install_parser.add_argument("--target", required=True, help="Target repository directory")
     install_parser.add_argument("--create-target", action="store_true", help="Create the target directory if missing")
     install_parser.add_argument(
@@ -69,13 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
             "that already imports @AGENTS.md on line 1."
         ),
     )
-    install_parser.add_argument(
-        "--no-update",
-        action="store_true",
-        dest="no_update",
-        help="Fail if delegation is already installed. Useful for CI or scripted first-time installs.",
-    )
     install_parser.set_defaults(handler=install)
+
+    update_parser = subparsers.add_parser("update", help="Refresh an existing install: uninstall then reinstall cleanly")
+    update_parser.add_argument("--target", required=True, help="Target repository directory")
+    update_parser.add_argument(
+        "--preserve-claude-md",
+        action="store_true",
+        help="Skip CLAUDE.md migration during the reinstall phase.",
+    )
+    update_parser.set_defaults(handler=update)
 
     verify_parser = subparsers.add_parser("verify", help="Verify an existing local delegation install")
     verify_parser.add_argument("--target", required=True, help="Target repository directory")

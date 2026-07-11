@@ -7,7 +7,9 @@ param(
     [ValidateSet("default", "research", "scout")]
     [string]$Profile = "default",
     [ValidateSet("claude", "codex", "agy", "auto")]
-    [string]$Caller = "auto"
+    [string]$Caller = "auto",
+    [int]$IdleTimeoutSeconds = 0,
+    [int]$TimeoutSeconds = 0
 )
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -15,6 +17,14 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # skip the per-call cwd up-walk (path-discovery optimization).
 $AgentDir  = Split-Path -Parent $ScriptDir
 $script:LastPythonExitCode = 0
+
+# Unique per-call slug so delegation transcripts are not all labelled "turn-unknown".
+# gemini_delegate.py reads DELEGATION_TURN_ID from the environment.
+if (-not $env:DELEGATION_TURN_ID) {
+    $env:DELEGATION_TURN_ID = "call-$(Get-Date -Format 'HHmmss-fff')"
+}
+
+Write-Host "[delegation] Starting Gemini delegation (profile: $Profile)..." -ForegroundColor Cyan
 
 function Invoke-Python3 {
     param(
@@ -73,6 +83,12 @@ if ($Profile -ne "default") {
 }
 if ($Caller -ne "auto") {
     $delegateArgs += @("--caller", $Caller)
+}
+if ($IdleTimeoutSeconds -gt 0) {
+    $delegateArgs += @("--idle-timeout-seconds", "$IdleTimeoutSeconds")
+}
+if ($TimeoutSeconds -gt 0) {
+    $delegateArgs += @("--timeout-seconds", "$TimeoutSeconds")
 }
 
 # Pass Prompt via stdin to avoid command line length limits (8KB)

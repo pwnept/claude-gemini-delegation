@@ -5,7 +5,7 @@ or research-heavy work to a Gemini backend so the main session stays lean.
 
 Three backends are supported — `agy` (Antigravity CLI) is the default. Three
 model profiles are available: `default` (Flash cascade), `research` (Pro, agy
-only), and `scout` (Gemma 4, 1.5K RPD — ideal for read-heavy file work).
+only), and `scout` (Flash on agy; Gemma 4 on alt backends — ideal for read-heavy file work).
 
 ## Intended Workflow
 
@@ -83,12 +83,14 @@ CLAUDE.md
   delegation_config.json
   hooks/                    <- all hook implementations live here
 .claude/
+  agents/
+    dave.md                 <- Dave sub-agent, discoverable by Claude Code
   commands/delegate.md      <- /delegate slash-command
   settings.json             <- PreToolUse guard wired here
 .agents/
   rules/delegation.md       <- Antigravity workspace rule
 agents/
-  code-review-agent-dave/
+  code-review-agent-dave/   <- full Dave workflow files
 ```
 
 ## Managed Markers
@@ -227,14 +229,15 @@ Three profiles are available via the `-Profile` flag:
 |---|---|---|
 | `default` | Flash cascade (3.5 → 3 → 2.5 → lite) | General delegation, code tasks |
 | `research` | Pro (agy only), falls back to Flash | Web search, docs, security audits |
-| `scout` | Gemma 4 31B → Gemma 4 26B A4B | File mapping, log parsing, dep scanning, test discovery |
+| `scout` | Flash on agy; Gemma 4 31B → 26B on alt backends | File mapping, log parsing, dep scanning, test discovery |
 
-The **scout profile** uses Gemma 4 models with 1.5K RPD and unlimited TPM. Use
-it for tasks that read many files but do not require code authoring or complex
-reasoning. Keep code writing and architectural decisions on the main Claude
+The **scout profile** is for tasks that read many files but do not require code
+authoring or complex reasoning. On agy (the primary backend) it uses Flash. On
+the `gemini-cli` and `gemini-api` alt backends it uses Gemma 4 (1.5K RPD,
+unlimited TPM). Keep code writing and architectural decisions on the main Claude
 session or the `default` / `research` profiles.
 
-Scout model IDs (both confirmed working via gemini-cli):
+Gemma 4 model IDs used by scout on alt backends (both confirmed working via gemini-cli):
 - `gemma-4-31b-it` — full 31B model, primary
 - `gemma-4-26b-a4b-it` — 26B MoE with 4B active params, faster fallback
 

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -174,8 +175,8 @@ calling harness — use the same command regardless of which agent is running:
 & .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10 -Profile scout
 ```
 
-Scout (Gemma 4, 1.5K RPD): file mapping, log parsing, dep scanning, test discovery — read only.
-Fallbacks: `DELEGATION_BACKEND=gemini-api` (needs `GEMINI_API_KEY`) or `DELEGATION_BACKEND=gemini-cli` (npm).
+Scout: file mapping, log parsing, dep scanning, test discovery — read only. Uses Flash on agy; Gemma 4 (1.5K RPD) on gemini-cli/api.
+Alt backends (if agy is unavailable): `DELEGATION_BACKEND=gemini-cli` (npm; grounding + Gemma 4 for scout) · `DELEGATION_BACKEND=gemini-api` (direct REST; needs `GEMINI_API_KEY`; no grounding).
 When running as Antigravity or `agy`, do the work directly — do not recursively invoke `agy`.
 {AGENTS_MARKER_END}
 """
@@ -334,7 +335,7 @@ script. Run from the repository root and report the full output:
 Profile guide:
 - (default) general code tasks and broad output
 - `-Profile research` web search, docs, security audits
-- `-Profile scout` file mapping, log parsing, dep scanning, test discovery (Gemma 4, 1.5K RPD)
+- `-Profile scout` file mapping, log parsing, dep scanning, test discovery (Flash on agy; Gemma 4 on alt backends)
 """
 
 
@@ -402,6 +403,7 @@ def create_claude_settings(claude_dir: Path) -> Path:
                         "type": "command",
                         "command": guard_command,
                         "timeout": 5,
+                        "statusMessage": "Checking delegation rules...",
                     }
                 ],
             }
@@ -587,11 +589,11 @@ def create_codex_hooks(project_dir: Path) -> Path | None:
             cleaned.append(copied)
 
     guard_command = "pwsh -NoProfile -ExecutionPolicy Bypass -File .gemini-delegation/hooks/delegation_guard.ps1"
-    for matcher in ("Bash", "apply_patch"):
+    for matcher in ("Bash", "shell", "PowerShell"):
         cleaned.append(
             {
                 "matcher": matcher,
-                "hooks": [{"type": "command", "command": guard_command, "timeout": 5}],
+                "hooks": [{"type": "command", "command": guard_command, "timeout": 5, "statusMessage": "Checking delegation rules..."}],
             }
         )
     hooks["PreToolUse"] = cleaned
@@ -650,20 +652,91 @@ def create_antigravity_rule(project_dir: Path) -> Path:
     return rule_path
 
 
-def install_agents(project_dir: Path) -> None:
+def _agent_name_from_file(path: Path) -> str | None:
+    """Return the `name:` value from YAML frontmatter if this is a Claude Code sub-agent, or None.
+
+    Memory/project doc files that carry a metadata.type field are not sub-agents.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    frontmatter: list[str] = []
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        frontmatter.append(line)
+    # Files with a metadata block are memory/project docs, not Claude Code sub-agents.
+    if any(re.match(r"^metadata:", l) for l in frontmatter):
+        return None
+    for line in frontmatter:
+        m = re.match(r"^name:\s*['\"]?([\w-]+)['\"]?", line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def install_agents(project_dir: Path) -> list[str]:
+    """Copy bundled agents into .gemini-delegation/agents/ and register sub-agent .md files.
+
+    Returns a list of paths (relative to project_dir, forward-slash) for every file
+    created outside .gemini-delegation/ — these go into the install manifest so that
+    update/uninstall can remove them even if they later move to a new location.
+    """
     source_agents = source_root() / "agents"
     if not source_agents.is_dir():
-        return
-    dest_agents = project_dir / "agents"
+        return []
+    dest_agents = project_dir / ".gemini-delegation" / "agents"
+    claude_agents = project_dir / ".claude" / "agents"
+    registered: list[str] = []
     for source_dir in source_agents.iterdir():
         if not source_dir.is_dir():
             continue
         dest_dir = dest_agents / source_dir.name
         dest_dir.mkdir(parents=True, exist_ok=True)
         for source in source_dir.iterdir():
-            if source.is_file():
-                shutil.copy2(source, dest_dir / source.name)
+            if not source.is_file():
+                continue
+            shutil.copy2(source, dest_dir / source.name)
+            if source.suffix == ".md":
+                agent_name = _agent_name_from_file(source)
+                if agent_name:
+                    claude_agents.mkdir(parents=True, exist_ok=True)
+                    dest_agent = claude_agents / f"{agent_name}.md"
+                    shutil.copy2(source, dest_agent)
+                    registered.append(dest_agent.relative_to(project_dir).as_posix())
+                    print(f"[OK] Registered sub-agent: {dest_agent}")
         print(f"[OK] Installed bundled agent: {dest_dir}")
+    return registered
+
+
+def write_manifest(project_dir: Path, owned_paths: list[str]) -> None:
+    """Write .gemini-delegation/manifest.json listing every owned file outside .gemini-delegation/.
+
+    uninstall_hooks reads this so files that have moved to new locations since a prior
+    install are still cleaned up — without needing a manual legacy list update.
+    """
+    manifest = {
+        "version": 1,
+        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "owned_files": sorted(owned_paths),
+    }
+    manifest_path = project_dir / ".gemini-delegation" / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def read_manifest_paths(project_dir: Path) -> list[str]:
+    """Return owned_files from the last install manifest, or [] if none exists."""
+    manifest_path = project_dir / ".gemini-delegation" / "manifest.json"
+    if not manifest_path.exists():
+        return []
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return data.get("owned_files", [])
+    except (OSError, ValueError):
+        return []
 
 
 def verify_install(target_dir: str, *, preserve_claude_md: bool = False) -> int:
@@ -736,7 +809,6 @@ def install_hooks(
     target_dir: str = ".",
     create_target: bool = False,
     preserve_claude_md: bool = False,
-    no_update: bool = False,
 ) -> int:
     if scope != "local":
         raise InstallError(
@@ -744,11 +816,10 @@ def install_hooks(
             "Install locally into each target repo with: install --target <path>."
         )
     project_dir = resolve_target(target_dir, create=create_target)
-    if no_update and (project_dir / ".gemini-delegation" / "delegation_config.json").exists():
+    if (project_dir / ".gemini-delegation" / "delegation_config.json").exists():
         raise InstallError(
             "Delegation is already installed in this repo.\n"
-            "Remove --no-update to refresh/update the existing install, "
-            "or run uninstall first for a clean re-install."
+            "Use 'update' to refresh an existing install (uninstalls then reinstalls cleanly)."
         )
     if preserve_claude_md:
         print("[INFO] --preserve-claude-md: skipping CLAUDE.md migration.")
@@ -760,9 +831,15 @@ def install_hooks(
     install_claude_command(project_dir)
     create_claude_settings(project_dir / ".claude")
     create_codex_hooks(project_dir)
-    create_antigravity_rule(project_dir)
-    install_agents(project_dir)
+    rule_path = create_antigravity_rule(project_dir)
+    agent_registrations = install_agents(project_dir)
     verify_install(str(project_dir), preserve_claude_md=preserve_claude_md)
+    owned_outside_delegation = [
+        ".claude/commands/delegate.md",
+        rule_path.relative_to(project_dir).as_posix(),
+        *agent_registrations,
+    ]
+    write_manifest(project_dir, owned_outside_delegation)
     print(f"[SUCCESS] Installed local agy delegation into {project_dir}")
     return 0
 
@@ -824,8 +901,14 @@ def uninstall_hooks(scope: str = "local", target_dir: str = ".") -> int:
     removed: list[str] = []
     failures: list[str] = []
 
+    # Read manifest written by the last install so any files that have since moved
+    # to a new location are still cleaned up without a manual legacy list update.
+    for relative in read_manifest_paths(project_dir):
+        _remove_path(project_dir / relative, removed, failures)
+
     for relative in (
-        # shared implementation tree (current)
+        # shared implementation tree (current) — removed as a directory last so
+        # manifest.json is still readable above when we call read_manifest_paths.
         ".gemini-delegation",
         # claude command (current)
         ".claude/commands/delegate.md",
@@ -855,6 +938,10 @@ def uninstall_hooks(scope: str = "local", target_dir: str = ".") -> int:
         ".codex/hooks/post_delegate.py",
         ".codex/hooks/analyze_metrics.py",
         ".codex/hooks/delegation_guard.py",
+        # legacy top-level agents/ dirs (moved to .gemini-delegation/agents/)
+        "agents/code-review-agent-dave",
+        "agents/archive",
+        "agents/memory",
     ):
         _remove_path(project_dir / relative, removed, failures)
 

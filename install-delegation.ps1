@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("help", "info", "install", "verify", "uninstall")]
+    [ValidateSet("help", "info", "install", "update", "verify", "uninstall")]
     [string]$Command = "help",
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -18,6 +18,7 @@ Usage:
   .\install-delegation.ps1 help
   .\install-delegation.ps1 info
   .\install-delegation.ps1 install --target "C:\path\to\repo"
+  .\install-delegation.ps1 update --target "C:\path\to\repo"
   .\install-delegation.ps1 verify --target "C:\path\to\repo"
   .\install-delegation.ps1 uninstall --target "C:\path\to\repo"
 

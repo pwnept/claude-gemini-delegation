@@ -33,8 +33,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-# All Gemini models share a single quota pool in agy, so tier variants
-# (Medium/High/Low) offer no real fallback benefit. One model per profile.
+# All Gemini models share a single quota pool in agy; no auto-fallback.
+# On capacity, print a --models hint so the caller can retry explicitly.
 DEFAULT_MODELS = ["Gemini 3.5 Flash (High)"]
 RESEARCH_MODELS = ["Gemini 3.1 Pro (High)"]
 
@@ -97,6 +97,20 @@ BACKENDS = ("agy", "gemini-cli", "gemini-api")
 # detect_caller() auto-detects the harness from DELEGATION_CALLER env token
 # (set by installer) with a vendor-env-sniff fallback.
 from delegation_caller import detect_caller, resolve_log_dir  # noqa: E402
+
+# Injected into every agy prompt. Keeps the idle watchdog alive via progress
+# updates and gives a clean extraction point for the final answer.
+_AGY_RESPONSE_PREAMBLE = (
+    "IMPORTANT RESPONSE FORMAT:\n"
+    "1. Start immediately with exactly 'working' on its own line — "
+    "this confirms receipt and resets the idle watchdog.\n"
+    "2. While working, output intermediate findings as you progress — "
+    "each update resets the idle watchdog.\n"
+    "3. End with exactly 'Final delegation answer:' on its own line, "
+    "followed by your complete consolidated answer.\n\n"
+)
+_WORKING_SENTINEL = "working"
+_FINAL_ANSWER_MARKER = "Final delegation answer:"
 
 CAPACITY_PATTERNS = (
     "exhausted your capacity",
@@ -453,12 +467,52 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text).replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _extract_final_answer(output: str) -> str:
+    """Return the section after 'Final delegation answer:' if present, else full output."""
+    lowered = output.lower()
+    idx = lowered.rfind(_FINAL_ANSWER_MARKER.lower())
+    if idx == -1:
+        return output
+    return output[idx + len(_FINAL_ANSWER_MARKER):].lstrip("\n").strip()
+
+
+def _save_timing_log(transcript_path: Path, timing: dict, model: str) -> None:
+    """Write a sibling _timing.txt next to the transcript for later review."""
+    timing_path = transcript_path.parent / (transcript_path.stem + "_timing.txt")
+    now_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    start = timing.get("start", 0.0)
+
+    def _delta(key: str) -> str:
+        val = timing.get(key)
+        return f"{val - start:.2f}s" if val is not None else "n/a"
+
+    lines = [
+        "timing_log_version: 1",
+        f"timestamp_utc: {now_utc}",
+        f"model: {model}",
+        f"total_seconds: {timing.get('end', start) - start:.2f}",
+        f"first_chunk_seconds: {_delta('first_chunk_at')}",
+        f"sentinel_seconds: {_delta('sentinel_at')}",
+        f"final_answer_seconds: {_delta('final_answer_at')}",
+        f"kill_reason: {timing.get('kill_reason') or 'none'}",
+        f"idle_timeout_seconds: {timing.get('idle_timeout', 'n/a')}",
+        f"first_response_seconds: {timing.get('first_response_seconds', 'n/a')}",
+        f"transcript: {transcript_path.name}",
+    ]
+    try:
+        timing_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass  # timing log is best-effort
+
+
 def run_agy(
     command: str,
     model: str,
     prompt: str,
     timeout: int,
     idle_timeout: int = 30,
+    first_response_seconds: int = 45,
+    timing: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run agy and return captured output.
 
@@ -501,6 +555,14 @@ def run_agy(
     start = time.monotonic()
     kill_reason = None
     trust_confirmed = False
+    sentinel_seen = False  # True once model outputs "working"
+    final_answer_seen = False
+
+    if timing is not None:
+        timing.update({
+            "start": start, "idle_timeout": idle_timeout,
+            "first_response_seconds": first_response_seconds,
+        })
 
     while True:
         now = time.monotonic()
@@ -508,12 +570,29 @@ def run_agy(
         if chunk:
             buf += chunk
             last_activity = now
+            if timing is not None and "first_chunk_at" not in timing:
+                timing["first_chunk_at"] = now
             # agy prompts "Do you trust…" on first run in a directory;
             # the cursor starts on "Yes, I trust this folder" so Enter confirms.
             if not trust_confirmed and "Do you trust the contents" in buf:
                 time.sleep(0.3)
                 pty.write("\r")
                 trust_confirmed = True
+            # Kill immediately when a capacity/429 signal appears — agy will go
+            # idle after printing it and the idle timeout would waste 60-90s.
+            if capacity_limited(buf):
+                kill_reason = "capacity"
+                os.kill(pty.pid, signal.SIGTERM)
+                break
+            stripped = _strip_ansi(buf).lower()
+            if not sentinel_seen and _WORKING_SENTINEL in stripped:
+                sentinel_seen = True
+                if timing is not None:
+                    timing["sentinel_at"] = now
+            if not final_answer_seen and _FINAL_ANSWER_MARKER.lower() in stripped:
+                final_answer_seen = True
+                if timing is not None:
+                    timing["final_answer_at"] = now
         elif not pty.isalive():
             # drain any remaining PTY buffer
             while True:
@@ -523,8 +602,11 @@ def run_agy(
                 buf += tail
             break
         else:
-            if idle_timeout > 0 and (now - last_activity) >= idle_timeout:
-                kill_reason = "idle"
+            # Two-phase idle: short window until model sends "working", then full idle_timeout.
+            # Each progress update from the model resets last_activity, keeping long tasks alive.
+            current_idle = idle_timeout if sentinel_seen else first_response_seconds
+            if current_idle > 0 and (now - last_activity) >= current_idle:
+                kill_reason = "idle" if sentinel_seen else "first-response"
                 os.kill(pty.pid, signal.SIGTERM)
                 break
             if timeout > 0 and (now - start) >= timeout:
@@ -535,13 +617,22 @@ def run_agy(
 
     stdout = _strip_ansi(buf)
 
+    if timing is not None:
+        timing["end"] = time.monotonic()
+        timing["kill_reason"] = kill_reason
+
     if kill_reason:
-        secs = idle_timeout if kill_reason == "idle" else timeout
+        if kill_reason == "idle":
+            secs = idle_timeout
+        elif kill_reason == "first-response":
+            secs = first_response_seconds
+        else:
+            secs = timeout
         raise subprocess.TimeoutExpired(
             cmd=[command, "--add-dir", workspace_dir, "--model", model],
             timeout=secs,
             output=stdout,
-            stderr="",
+            stderr="capacity-limited" if kill_reason == "capacity" else "",
         )
 
     return subprocess.CompletedProcess(
@@ -700,7 +791,7 @@ def parse_args() -> argparse.Namespace:
         "--profile",
         choices=("default", "research", "scout"),
         default="default",
-        help="Model order profile. Research uses Pro; scout uses Gemma 4 for read-heavy tasks.",
+        help="Model order profile. Research uses Pro; scout uses Flash on agy (Gemma 4 on gemini-cli/api).",
     )
     parser.add_argument(
         "--backend",
@@ -831,7 +922,8 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
         if capacity_limited(combined):
             cooldown = mark_cooldown(model, state, combined, time.time(), args.cooldown_seconds)
             print(
-                "{0} is capacity-limited; cooling down for {1}s and trying next model.".format(model, cooldown),
+                "{0} is capacity-limited (cooldown {1}s). "
+                "Retry with: --models \"Gemini 3.1 Pro (High)\"".format(model, cooldown),
                 file=sys.stderr,
             )
             continue
@@ -848,6 +940,7 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
         save_state(state_path, state)
 
     print("All models are currently capacity-limited or unavailable.", file=sys.stderr)
+    print("Retry with a different model: --models \"Gemini 3.1 Pro (High)\"", file=sys.stderr)
     if skipped:
         print("Skipped due to cooldown: {0}".format(", ".join(skipped)), file=sys.stderr)
     if last_result is not None:
@@ -910,11 +1003,23 @@ def main() -> int:
         )
         return 2
 
+    if backend == "gemini-cli":
+        print(
+            "[alt-backend: gemini-cli] Primary backend is agy; gemini-cli is in use (npm required).",
+            file=sys.stderr,
+        )
+    elif backend == "gemini-api":
+        print(
+            "[alt-backend: gemini-api] Primary backend is agy; gemini-api is in use "
+            "(direct REST — no grounding, no CLI features; needs GEMINI_API_KEY).",
+            file=sys.stderr,
+        )
+
     # Increase idle timeout for research profile if not explicitly overridden
     if args.profile == "research" and args.idle_timeout_seconds == 60:
         args.idle_timeout_seconds = 120
     if args.profile == "scout" and args.idle_timeout_seconds == 60:
-        args.idle_timeout_seconds = 90
+        args.idle_timeout_seconds = 45  # Flash responds fast; long idle means it's stuck
 
     prompt = args.prompt if args.prompt is not None else sys.stdin.read()
     prompt = prompt.strip()
@@ -953,15 +1058,32 @@ def main() -> int:
     )
     command = resolve_agy_command()
 
+    augmented_prompt = _AGY_RESPONSE_PREAMBLE + prompt
+    timing: dict = {}
+
     def attempt(model: str) -> subprocess.CompletedProcess:
-        return run_agy(
-            command, model, prompt,
+        timing.clear()
+        result = run_agy(
+            command, model, augmented_prompt,
             timeout=args.timeout_seconds,
             idle_timeout=args.idle_timeout_seconds,
+            first_response_seconds=45,
+            timing=timing,
         )
+        if result.returncode == 0 and result.stdout:
+            filtered = _extract_final_answer(result.stdout)
+            result = subprocess.CompletedProcess(
+                args=result.args,
+                returncode=result.returncode,
+                stdout=filtered,
+                stderr=result.stderr,
+            )
+        return result
 
     def _on_success(output: str, model: str) -> None:
-        _save_delegation_transcript(prompt, output, model, claude_dir, args, "agy")
+        dest = _save_delegation_transcript(prompt, output, model, claude_dir, args, "agy")
+        if dest and timing:
+            _save_timing_log(dest, timing, model)
 
     return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 

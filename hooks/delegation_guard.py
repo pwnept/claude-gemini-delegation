@@ -61,13 +61,41 @@ Add -Profile research for documentation lookup or web search.
 """
 
 
+def _update_caller_session(payload: dict) -> None:
+    """Persist the active turn id into .caller-session.json before delegation runs.
+
+    Claude supplies prompt_id; Codex supplies turn_id at the top level.
+    delegation_guard runs as a PreToolUse hook before every tool call, so by the
+    time delegate_and_log.ps1 executes, the file already has the current turn id.
+    We merge rather than overwrite so session_id written by archive-sync is kept.
+    """
+    # Codex: turn_id is a top-level field. Claude: prompt_id. Prefer whichever is set.
+    prompt_id = payload.get("turn_id") or payload.get("prompt_id", "")
+    if not prompt_id:
+        return
+    session_file = _script_hooks_dir.parent / ".caller-session.json"
+    try:
+        existing = json.loads(session_file.read_text(encoding="utf-8")) if session_file.exists() else {}
+    except (OSError, ValueError):
+        existing = {}
+    existing["turn_id"] = prompt_id
+    if payload.get("session_id"):
+        existing["session_id"] = payload["session_id"]
+    try:
+        session_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
 
-    if payload.get("tool_name") not in ("Bash", "PowerShell"):
+    _update_caller_session(payload)
+
+    if payload.get("tool_name") not in ("Bash", "PowerShell", "shell", "run_command"):
         return 0
 
     command = payload.get("tool_input", {}).get("command", "")
