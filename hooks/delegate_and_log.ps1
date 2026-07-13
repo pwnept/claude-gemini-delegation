@@ -1,10 +1,11 @@
-# Full delegation pipeline: pre_delegate -> agy runner -> post_delegate
+# Full delegation pipeline in a single Python spawn: gemini_delegate.py handles
+# pre-format (prompt building), the agy run, and post-validate (metrics) itself.
 # Usage: ./delegate_and_log.ps1 <task> [context] [max_lines] [-Profile research]
 param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Task,
     [Parameter(Position = 1)][string]$Context = "General task",
     [Parameter(Position = 2)][int]$MaxLines = 0,
-    [ValidateSet("default", "research", "scout")]
+    [ValidateSet("default", "research", "scout", "skim")]
     [string]$Profile = "default",
     [ValidateSet("claude", "codex", "agy", "auto")]
     [string]$Caller = "auto",
@@ -16,7 +17,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # .gemini-delegation dir (parent of hooks/) — passed to Python hooks so they
 # skip the per-call cwd up-walk (path-discovery optimization).
 $AgentDir  = Split-Path -Parent $ScriptDir
-$script:LastPythonExitCode = 0
 
 # Unique per-call slug so delegation transcripts are not all labelled "turn-unknown".
 # gemini_delegate.py reads DELEGATION_TURN_ID from the environment.
@@ -26,58 +26,54 @@ if (-not $env:DELEGATION_TURN_ID) {
 
 Write-Host "[delegation] Starting Gemini delegation (profile: $Profile)..." -ForegroundColor Cyan
 
-function Invoke-Python3 {
-    param(
-        [string[]]$PythonArgs,
-        [AllowEmptyString()]
-        [string]$InputText,
-        [switch]$HasInput
-    )
+function Resolve-Python3 {
+    # Returns @(command, prefix-args...). Caches the probe result in
+    # DELEGATION_PYTHON (process env) so repeat calls in the same shell
+    # session skip the version-probe spawn entirely.
+    if ($env:DELEGATION_PYTHON) {
+        $cached = $env:DELEGATION_PYTHON -split ' '
+        if (Get-Command $cached[0] -ErrorAction SilentlyContinue) {
+            return $cached
+        }
+    }
 
     $candidates = @(
         @{ Command = "py"; Prefix = @("-3") },
         @{ Command = "python3"; Prefix = @() },
         @{ Command = "python"; Prefix = @() }
     )
-
     foreach ($candidate in $candidates) {
         if (-not (Get-Command $candidate.Command -ErrorAction SilentlyContinue)) {
             continue
         }
-
         & $candidate.Command @($candidate.Prefix + @("-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)")) *> $null
         if ($LASTEXITCODE -ne 0) {
             continue
         }
-
-        if ($HasInput) {
-            $InputText | & $candidate.Command @($candidate.Prefix + $PythonArgs)
-        } else {
-            & $candidate.Command @($candidate.Prefix + $PythonArgs)
-        }
-        $script:LastPythonExitCode = $LASTEXITCODE
-        return
+        $resolved = @($candidate.Command) + $candidate.Prefix
+        $env:DELEGATION_PYTHON = $resolved -join ' '
+        return $resolved
     }
+    return $null
+}
 
+# @() guards PowerShell's pipeline unrolling: a 1-element return (e.g. bare
+# "python3") arrives as a String, and $python[0] would index its first CHAR.
+$python = @(Resolve-Python3)
+if (-not $python) {
     Write-Error "Python 3 was not found. Install Python 3.6+ or ensure py -3/python3 is on PATH."
-    $script:LastPythonExitCode = 127
+    exit 127
 }
 
-$promptArgs = @("$ScriptDir/pre_delegate.py", "-", $Context)
+$delegateArgs = @(
+    "$ScriptDir/gemini_delegate.py",
+    "--agent-dir", $AgentDir,
+    "--pre-format", "--context", $Context,
+    "--post-validate"
+)
 if ($MaxLines -gt 0) {
-    $promptArgs += "$MaxLines"
+    $delegateArgs += @("--max-lines", "$MaxLines")
 }
-
-# Pass Task via stdin to avoid PowerShell arg splitting/length issues
-$prompt = Invoke-Python3 -PythonArgs $promptArgs -InputText $Task -HasInput
-$preExitCode = $script:LastPythonExitCode
-if ($preExitCode -ne 0 -or -not $prompt) {
-    Write-Error "pre_delegate.py failed or produced no output."
-    exit $(if ($preExitCode -ne 0) { $preExitCode } else { 1 })
-}
-$promptText = $prompt -join "`n"
-
-$delegateArgs = @("$ScriptDir/gemini_delegate.py", "--agent-dir", $AgentDir)
 if ($Profile -ne "default") {
     $delegateArgs += @("--profile", $Profile)
 }
@@ -91,23 +87,14 @@ if ($TimeoutSeconds -gt 0) {
     $delegateArgs += @("--timeout-seconds", "$TimeoutSeconds")
 }
 
-# Pass Prompt via stdin to avoid command line length limits (8KB)
-$response = Invoke-Python3 -PythonArgs $delegateArgs -InputText $promptText -HasInput
-$delegateExitCode = $script:LastPythonExitCode
+# Pass Task via stdin to avoid PowerShell arg splitting/length issues
+$pythonArgs = @($python | Select-Object -Skip 1) + $delegateArgs
+$response = $Task | & $python[0] @pythonArgs
+$delegateExitCode = $LASTEXITCODE
 $responseText = $response -join "`n"
 
 if ($responseText) {
     Write-Output $responseText
-    $maxLinesForValidation = if ($MaxLines -gt 0) { $MaxLines } else { 10 }
-    $tmpFile = [System.IO.Path]::GetTempFileName()
-    try {
-        $responseText | Set-Content -Path $tmpFile -Encoding UTF8
-        $postArgs = @("$ScriptDir/post_delegate.py", "--agent-dir", $AgentDir, "--input-file", $tmpFile, "$maxLinesForValidation", $Task)
-        if ($Caller -ne "auto") { $postArgs += @("--caller", $Caller) }
-        Invoke-Python3 -PythonArgs $postArgs | Out-Null
-    } finally {
-        Remove-Item $tmpFile -ErrorAction SilentlyContinue
-    }
 }
 
 exit $delegateExitCode

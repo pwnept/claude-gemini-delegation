@@ -48,7 +48,7 @@ class TestTargetInstall(unittest.TestCase):
             # shims must NOT be created in the no-shim layout
             self.assertFalse((project_dir / ".claude" / "hooks" / "delegate_and_log.ps1").exists())
             self.assertFalse((project_dir / ".codex" / "hooks" / "delegate_and_log.ps1").exists())
-            self.assertTrue((project_dir / "agents" / "code-review-agent-dave" / "dave_audit.md").is_file())
+            self.assertTrue((project_dir / ".gemini-delegation" / "agents" / "code-review-agent-dave" / "dave_audit.md").is_file())
 
     def test_install_skips_claude_migration_when_agents_already_has_same_text(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -223,32 +223,22 @@ class TestAgentsMdContentGuard(unittest.TestCase):
                 (project_dir / "CLAUDE.md").read_text(encoding="utf-8"), "@AGENTS.md\n"
             )
 
-    def test_reinstall_does_not_trigger_guard(self):
-        """Re-running install after initial install must not produce spurious warnings."""
+    def test_reinstall_requires_update_flow(self):
+        """install is first-time only; the update flow (uninstall + install) must not warn."""
         with tempfile.TemporaryDirectory() as tmpdir:
             install_hooks(target_dir=tmpdir)
 
-            import io
+            with self.assertRaises(InstallError):
+                install_hooks(target_dir=tmpdir)
+
             from contextlib import redirect_stdout
             out = io.StringIO()
             with redirect_stdout(out):
+                uninstall_hooks(target_dir=tmpdir)
                 result = install_hooks(target_dir=tmpdir)
 
             self.assertEqual(result, 0)
             self.assertNotIn("WARN", out.getvalue())
-
-
-class TestNoUpdateFlag(unittest.TestCase):
-    def test_no_update_errors_if_already_installed(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            install_hooks(target_dir=tmpdir)
-            with self.assertRaises(InstallError):
-                install_hooks(target_dir=tmpdir, no_update=True)
-
-    def test_no_update_succeeds_on_fresh_install(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = install_hooks(target_dir=tmpdir, no_update=True)
-            self.assertEqual(result, 0)
 
 
 class TestRevertClaudeSettings(unittest.TestCase):

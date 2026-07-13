@@ -23,6 +23,8 @@ MANAGED_FILES = (
     ".gemini-delegation/hooks/delegation_guard.ps1",
     ".gemini-delegation/hooks/delegate.ps1",
     ".gemini-delegation/hooks/delegate_and_log.ps1",
+    ".gemini-delegation/hooks/delegate_manager.py",
+    ".gemini-delegation/hooks/delegate_manager.ps1",
     ".gemini-delegation/hooks/delegate.bat",
     ".gemini-delegation/hooks/delegate",
     ".gemini-delegation/delegation_config.json",
@@ -39,6 +41,8 @@ HOOK_FILES = (
     "delegation_guard.ps1",
     "delegate.ps1",
     "delegate_and_log.ps1",
+    "delegate_manager.py",
+    "delegate_manager.ps1",
     "delegate.bat",
     "delegate",
 )
@@ -175,7 +179,8 @@ calling harness — use the same command regardless of which agent is running:
 & .gemini-delegation/hooks/delegate_and_log.ps1 "<task>" "<context>" 10 -Profile scout
 ```
 
-Scout: file mapping, log parsing, dep scanning, test discovery — read only. Uses Flash on agy; Gemma 4 (1.5K RPD) on gemini-cli/api.
+Profiles: `skim` = ultra-broad haystack/log searches (Flash Low); scout = file mapping, log parsing, dep scanning — read only (Flash on agy; Gemma 4 on gemini-cli/api); `research` = web/docs (Pro High).
+Async: `& .gemini-delegation/hooks/delegate_manager.ps1 async "<task>"` prints an id and returns; background `... wait <id>` (same script) — its exit is the wake signal. `spawn/list/steer/read/stop` manage persistent steerable delegates.
 Alt backends (if agy is unavailable): `DELEGATION_BACKEND=gemini-cli` (npm; grounding + Gemma 4 for scout) · `DELEGATION_BACKEND=gemini-api` (direct REST; needs `GEMINI_API_KEY`; no grounding).
 When running as Antigravity or `agy`, do the work directly — do not recursively invoke `agy`.
 {AGENTS_MARKER_END}
@@ -336,6 +341,7 @@ Profile guide:
 - (default) general code tasks and broad output
 - `-Profile research` web search, docs, security audits
 - `-Profile scout` file mapping, log parsing, dep scanning, test discovery (Flash on agy; Gemma 4 on alt backends)
+- `-Profile skim` ultra-broad haystack/log searches, "does X appear anywhere" (Flash Low, terse digest)
 """
 
 

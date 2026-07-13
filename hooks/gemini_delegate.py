@@ -35,8 +35,12 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # All Gemini models share a single quota pool in agy; no auto-fallback.
 # On capacity, print a --models hint so the caller can retry explicitly.
+# Three-model preset: skim -> Flash (Low), default/scout -> Flash (High),
+# research -> Pro (High). Profiles differ by system-prompt persona too
+# (see _PROFILE_PREAMBLES).
 DEFAULT_MODELS = ["Gemini 3.5 Flash (High)"]
 RESEARCH_MODELS = ["Gemini 3.1 Pro (High)"]
+SKIM_MODELS = ["Gemini 3.5 Flash (Low)"]
 
 # Keep the full known-model list for --models overrides and prefix validation.
 KNOWN_AGY_MODELS = [
@@ -100,7 +104,7 @@ from delegation_caller import detect_caller, resolve_log_dir  # noqa: E402
 
 # Injected into every agy prompt. Keeps the idle watchdog alive via progress
 # updates and gives a clean extraction point for the final answer.
-_AGY_RESPONSE_PREAMBLE = (
+_AGY_RESPONSE_FORMAT = (
     "IMPORTANT RESPONSE FORMAT:\n"
     "1. Start immediately with exactly 'working' on its own line — "
     "this confirms receipt and resets the idle watchdog.\n"
@@ -109,6 +113,38 @@ _AGY_RESPONSE_PREAMBLE = (
     "3. End with exactly 'Final delegation answer:' on its own line, "
     "followed by your complete consolidated answer.\n\n"
 )
+
+# Per-profile persona lines. Profiles differ by system prompt, not just model:
+# the delegate is a librarian returning fact-based digests, never a developer.
+_PROFILE_PERSONAS = {
+    "skim": (
+        "ROLE: You are a high-speed haystack scanner. The task is an ultra-broad "
+        "search (grep-at-scale, 'does this string appear anywhere', firehose log "
+        "triage). Do NOT reason deeply. Return a terse digest: matches found, "
+        "file paths / locations, counts. No prose, no analysis.\n\n"
+    ),
+    "research": (
+        "ROLE: You are a deep research librarian. Search the web and docs, "
+        "synthesize findings into a fact-based digest with citations and short "
+        "conclusions. Report facts and locations — do not write code or make "
+        "architecture decisions.\n\n"
+    ),
+    "default": (
+        "ROLE: You are a codebase librarian. Traverse files, map where things "
+        "live, answer 'where does X live / who calls Y' style questions. Return "
+        "a fact-based digest: findings, file paths, counts, short answer. Do not "
+        "write code or make design decisions.\n\n"
+    ),
+}
+_PROFILE_PERSONAS["scout"] = _PROFILE_PERSONAS["default"]
+
+
+def _agy_preamble(profile: str) -> str:
+    return _PROFILE_PERSONAS.get(profile, _PROFILE_PERSONAS["default"]) + _AGY_RESPONSE_FORMAT
+
+
+# Backward-compat alias (default persona) for callers importing the old name.
+_AGY_RESPONSE_PREAMBLE = _agy_preamble("default")
 _WORKING_SENTINEL = "working"
 _FINAL_ANSWER_MARKER = "Final delegation answer:"
 
@@ -422,7 +458,9 @@ def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
     if model_order is None:
         if args.profile == "research":
             model_order = ",".join(RESEARCH_API_MODELS)
-        elif args.profile == "scout":
+        elif args.profile in ("scout", "skim"):
+            # skim has no dedicated API tier; scout models are the matching
+            # cheap/low-reasoning choice, never the default tier.
             model_order = ",".join(SCOUT_API_MODELS)
         else:
             model_order = ",".join(DEFAULT_API_MODELS)
@@ -789,9 +827,33 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--profile",
-        choices=("default", "research", "scout"),
+        choices=("default", "research", "scout", "skim"),
         default="default",
-        help="Model order profile. Research uses Pro; scout uses Flash on agy (Gemma 4 on gemini-cli/api).",
+        help="Model order profile. Research uses Pro (High); skim uses Flash (Low) for "
+             "ultra-broad haystack searches; scout uses Flash on agy (Gemma 4 on gemini-cli/api).",
+    )
+    parser.add_argument(
+        "--pre-format",
+        action="store_true",
+        help="Treat the input as a raw task and format it via pre_delegate before sending "
+             "(replaces a separate pre_delegate.py invocation).",
+    )
+    parser.add_argument(
+        "--context",
+        default="General task",
+        help="Task context used by --pre-format.",
+    )
+    parser.add_argument(
+        "--max-lines",
+        type=int,
+        default=0,
+        help="Response line budget used by --pre-format/--post-validate. 0 = auto.",
+    )
+    parser.add_argument(
+        "--post-validate",
+        action="store_true",
+        help="Validate the response and log metrics after a successful delegation "
+             "(replaces a separate post_delegate.py invocation). Warnings go to stderr.",
     )
     parser.add_argument(
         "--backend",
@@ -849,6 +911,30 @@ def parse_args() -> argparse.Namespace:
              "When provided, skips the cwd up-walk in find_agent_dir().",
     )
     return parser.parse_args()
+
+
+def _post_validate(response: str, args: argparse.Namespace) -> None:
+    """Inline post_delegate validation + metrics; stdout stays the pure response."""
+    try:
+        import contextlib
+
+        import post_delegate
+        agent_dir = Path(args.agent_dir) if args.agent_dir else find_agent_dir(Path.cwd())
+        metrics_dir = resolve_log_dir(args.caller, agent_dir / "metrics")
+        max_lines = getattr(args, "max_lines", 0) or 10
+        with contextlib.redirect_stdout(sys.stderr):
+            _, warnings = post_delegate.validate_response(response, max_lines)
+            for warning in warnings:
+                print(warning)
+        label = getattr(args, "_task_label", None) or getattr(args, "context", "unknown")
+        post_delegate.log_metrics(
+            label,
+            post_delegate.count_lines(response),
+            post_delegate.estimate_tokens(response),
+            metrics_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - validation is best-effort, never fail the run
+        print(f"[WARN] post-validate failed: {exc}", file=sys.stderr)
 
 
 def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, attempt, *, on_success=None) -> int:
@@ -913,6 +999,8 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
                 print("Model used: {0}".format(model), file=sys.stderr)
             if not args.no_save and on_success:
                 on_success(output, model)
+            if getattr(args, "post_validate", False):
+                _post_validate(output, args)
             sys.stdout.write(output)
             if not args.no_state:
                 state.setdefault("cooldowns", {}).pop(model, None)
@@ -929,6 +1017,10 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
             continue
 
         if output:
+            # Failed run that still produced output: quota was spent and the
+            # caller sees the text, so it must land in the metrics too.
+            if getattr(args, "post_validate", False):
+                _post_validate(output, args)
             sys.stdout.write(output)
         if error:
             sys.stderr.write(error)
@@ -945,6 +1037,8 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
         print("Skipped due to cooldown: {0}".format(", ".join(skipped)), file=sys.stderr)
     if last_result is not None:
         if last_result.stdout:
+            if getattr(args, "post_validate", False):
+                _post_validate(last_result.stdout, args)
             sys.stdout.write(last_result.stdout)
         if last_result.stderr:
             sys.stderr.write(last_result.stderr)
@@ -961,7 +1055,9 @@ def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
     if model_order is None:
         if args.profile == "research":
             model_order = ",".join(RESEARCH_CLI_MODELS)
-        elif args.profile == "scout":
+        elif args.profile in ("scout", "skim"):
+            # skim has no dedicated CLI tier; the scout models are the
+            # matching cheap/low-reasoning choice, never the default tier.
             model_order = ",".join(SCOUT_CLI_MODELS)
         else:
             model_order = ",".join(DEFAULT_CLI_MODELS)
@@ -1018,7 +1114,7 @@ def main() -> int:
     # Increase idle timeout for research profile if not explicitly overridden
     if args.profile == "research" and args.idle_timeout_seconds == 60:
         args.idle_timeout_seconds = 120
-    if args.profile == "scout" and args.idle_timeout_seconds == 60:
+    if args.profile in ("scout", "skim") and args.idle_timeout_seconds == 60:
         args.idle_timeout_seconds = 45  # Flash responds fast; long idle means it's stuck
 
     prompt = args.prompt if args.prompt is not None else sys.stdin.read()
@@ -1026,6 +1122,16 @@ def main() -> int:
     if not prompt:
         print("No prompt provided.", file=sys.stderr)
         return 2
+
+    if args.pre_format:
+        # Fold the pre_delegate step into this process (one Python spawn per call).
+        import pre_delegate
+        task = pre_delegate.expand_paths(prompt)
+        task_type = pre_delegate.detect_task_type(task)
+        max_lines = args.max_lines or pre_delegate.estimate_compression(task)
+        args.max_lines = max_lines
+        args._task_label = task
+        prompt = pre_delegate.build_prompt(task_type, task, args.context, max_lines)
 
     claude_dir = Path(args.agent_dir) if args.agent_dir else find_agent_dir(Path.cwd())
 
@@ -1038,8 +1144,13 @@ def main() -> int:
     # backend == "agy"
     model_order = args.models
     if model_order is None:
-        model_order = ",".join(RESEARCH_MODELS if args.profile == "research" else DEFAULT_MODELS)
-        # scout profile has no agy Gemma models; fall through to default Flash
+        if args.profile == "research":
+            model_order = ",".join(RESEARCH_MODELS)
+        elif args.profile == "skim":
+            model_order = ",".join(SKIM_MODELS)
+        else:
+            # scout profile has no agy Gemma models; fall through to default Flash
+            model_order = ",".join(DEFAULT_MODELS)
 
     models = parse_model_order(model_order)
     if not models:
@@ -1058,7 +1169,7 @@ def main() -> int:
     )
     command = resolve_agy_command()
 
-    augmented_prompt = _AGY_RESPONSE_PREAMBLE + prompt
+    augmented_prompt = _agy_preamble(args.profile) + prompt
     timing: dict = {}
 
     def attempt(model: str) -> subprocess.CompletedProcess:

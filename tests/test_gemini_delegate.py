@@ -17,10 +17,11 @@ import delegation_caller
 
 
 class FakeResult:
-    def __init__(self, returncode, stdout="", stderr=""):
+    def __init__(self, returncode, stdout="", stderr="", args=()):
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+        self.args = list(args)
 
 
 class TestAgyDelegate(unittest.TestCase):
@@ -90,6 +91,69 @@ class TestAgyDelegate(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(calls, ["Gemini 3.5 Flash (High)"])
+
+    def test_skim_profile_uses_flash_low_and_skim_persona(self):
+        calls = []
+        prompts = []
+
+        def fake_run(command, model, prompt, timeout, **kwargs):
+            calls.append(model)
+            prompts.append(prompt)
+            return FakeResult(0, stdout="ok\n")
+
+        with mock.patch.object(sys, "argv", ["gemini_delegate.py", "--profile", "skim", "--no-state", "--no-save", "hello"]):
+            with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
+                with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
+                    with mock.patch.object(sys.stdout, "write"):
+                        code = gemini_delegate.main()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["Gemini 3.5 Flash (Low)"])
+        self.assertIn("haystack", prompts[0])
+        self.assertIn("Final delegation answer:", prompts[0])
+
+    def test_profile_preambles_share_sentinels_but_differ_by_persona(self):
+        preambles = {p: gemini_delegate._agy_preamble(p) for p in ("default", "scout", "research", "skim")}
+        for text in preambles.values():
+            self.assertIn("'working'", text)
+            self.assertIn("Final delegation answer:", text)
+        self.assertEqual(preambles["default"], preambles["scout"])
+        self.assertNotEqual(preambles["default"], preambles["research"])
+        self.assertNotEqual(preambles["default"], preambles["skim"])
+
+    def test_pre_format_and_post_validate_fold_into_single_invocation(self):
+        prompts = []
+
+        def fake_run(command, model, prompt, timeout, **kwargs):
+            prompts.append(prompt)
+            return FakeResult(0, stdout="line1\nline2\nline3\n")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_dir = Path(tmpdir) / ".gemini-delegation"
+            agent_dir.mkdir(parents=True)
+            argv = [
+                "gemini_delegate.py", "--pre-format", "--context", "Smoke context",
+                "--max-lines", "7", "--post-validate", "--agent-dir", str(agent_dir),
+                "--caller", "codex", "--no-state", "--no-save", "npm ls",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                with mock.patch.object(gemini_delegate, "resolve_agy_command", return_value="agy.exe"):
+                    with mock.patch.object(gemini_delegate, "run_agy", side_effect=fake_run):
+                        with mock.patch.object(
+                            gemini_delegate, "resolve_log_dir",
+                            side_effect=lambda caller, fallback: fallback,
+                        ):
+                            with mock.patch.object(sys.stdout, "write"):
+                                code = gemini_delegate.main()
+
+            self.assertEqual(code, 0)
+            # pre_delegate formatting made it into the outgoing prompt
+            self.assertIn("CONTEXT: Smoke context", prompts[0])
+            self.assertIn("npm ls", prompts[0])
+            # post_delegate metrics were logged inline
+            metrics = list((agent_dir / "metrics").glob("delegation-*.csv"))
+            self.assertEqual(len(metrics), 1)
+            self.assertIn("npm ls", metrics[0].read_text(encoding="utf-8"))
 
     def test_research_profile_uses_pro_high(self):
         calls = []

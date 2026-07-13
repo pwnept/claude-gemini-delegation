@@ -29,7 +29,6 @@ class TestCLI(unittest.TestCase):
             target_dir="C:\\repo",
             create_target=False,
             preserve_claude_md=False,
-            no_update=False,
         )
 
     @patch("gemini_delegation.installer.verify_install")
