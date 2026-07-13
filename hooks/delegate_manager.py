@@ -605,19 +605,30 @@ def cmd_host(args: argparse.Namespace) -> int:
         save_record(record)
         return record
 
-    def _dump_pty_log() -> None:
-        # errors="replace": PTY reads can carry lone surrogates that raw utf-8
-        # rejects; a failed dump must never take down the host, but say why.
+    logged_upto = 0  # offset into buf already appended to pty.log
+
+    def _dump_pty_log(final: bool = False) -> None:
+        """Append newly seen output to pty.log (full session survives buffer
+        trims). A small tail is held back so ANSI escapes split across chunk
+        boundaries aren't stripped into garbage; `final` flushes everything.
+
+        errors="replace": PTY reads can carry lone surrogates that raw utf-8
+        rejects; a failed dump must never take down the host, but say why.
+        """
+        nonlocal logged_upto
+        safe_end = len(buf) if final else max(logged_upto, len(buf) - 64)
+        if safe_end <= logged_upto:
+            return
         try:
-            (ddir / "pty.log").write_text(
-                gemini_delegate._strip_ansi(buf), encoding="utf-8", errors="replace"
-            )
+            with open(ddir / "pty.log", "a", encoding="utf-8", errors="replace") as fh:
+                fh.write(gemini_delegate._strip_ansi(buf[logged_upto:safe_end]))
+            logged_upto = safe_end
         except Exception as exc:  # noqa: BLE001
             print(f"[host] pty.log dump failed: {exc}", file=sys.stderr, flush=True)
 
     def _finish(status: str) -> int:
         _update_record(status=status, last_activity=time.time())
-        _dump_pty_log()
+        _dump_pty_log(final=True)
         try:
             if pty.isalive():
                 os.kill(pty.pid, signal.SIGTERM)
@@ -657,13 +668,14 @@ def cmd_host(args: argparse.Namespace) -> int:
         prompt = request.read_text(encoding="utf-8").strip()
         nonce = uuid.uuid4().hex[:6]
         pattern = _marker_pattern(_turn_marker(nonce))
-        # A newline submits in the interactive TUI — collapse to one line.
-        one_line = re.sub(
-            r"\s+", " ",
-            _interactive_prompt(record.get("profile", "default"), nonce, prompt),
-        )
+        # Bracketed paste (ESC[200~ ... ESC[201~) lets embedded newlines enter
+        # the input box as literal newlines instead of submitting, so a steer
+        # prompt keeps its structure (code snippets, lists, log excerpts).
+        payload = _interactive_prompt(record.get("profile", "default"), nonce, prompt).strip()
         marker_before = len(buf)
-        pty.write(one_line + "\r")
+        pty.write("\x1b[200~" + payload + "\x1b[201~")
+        time.sleep(0.3)  # let the TUI ingest the paste before submitting
+        pty.write("\r")
         deadline = time.time() + int(record.get("steer_timeout_seconds") or 600)
         answer = None
         last_output = time.time()
@@ -722,10 +734,13 @@ def cmd_host(args: argparse.Namespace) -> int:
             if now - record.get("last_activity", created) > idle_gc:
                 return _finish("done")
             # Between turns, cap the transcript buffer: a multi-hour host would
-            # otherwise accumulate every repaint frame it ever saw. (Never trim
-            # mid-turn — _serve holds an offset into buf.)
+            # otherwise accumulate every repaint frame it ever saw. Flush to
+            # pty.log first so no history is lost, then rebase the log offset.
+            # (Never trim mid-turn — _serve holds an offset into buf.)
             if len(buf) > 131072:
+                _dump_pty_log(final=True)
                 buf = buf[-65536:]
+                logged_upto = len(buf)
         else:
             # Injecting a prompt while the TUI is still booting/signing-in (or
             # showing the trust dialog) silently loses it. Quiet-time alone is

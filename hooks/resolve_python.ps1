@@ -25,16 +25,26 @@ function Resolve-Python3 {
     # ourselves (a known candidate) is trusted after an existence check; a
     # user-supplied custom value is version-probed before use.
     if ($env:DELEGATION_PYTHON) {
-        $cached = @($env:DELEGATION_PYTHON -split ' ')
+        $raw = $env:DELEGATION_PYTHON
         $isKnown = $script:KnownPythonCandidates |
-            Where-Object { (@($_.Command) + $_.Prefix) -join ' ' -eq $env:DELEGATION_PYTHON }
+            Where-Object { (@($_.Command) + $_.Prefix) -join ' ' -eq $raw }
         if ($isKnown) {
+            $cached = @($raw -split ' ')
             if (Get-Command $cached[0] -ErrorAction SilentlyContinue) {
                 return $cached
             }
         }
-        elseif (Test-Python3 $cached[0] @($cached | Select-Object -Skip 1)) {
-            return $cached
+        # Custom value: an interpreter path may contain spaces, so try the
+        # whole value as one command before falling back to space-splitting
+        # it into command + args.
+        elseif ((Get-Command $raw -ErrorAction SilentlyContinue) -and (Test-Python3 $raw @())) {
+            return @($raw)
+        }
+        else {
+            $cached = @($raw -split ' ')
+            if (Test-Python3 $cached[0] @($cached | Select-Object -Skip 1)) {
+                return $cached
+            }
         }
     }
 
