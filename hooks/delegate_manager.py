@@ -201,11 +201,44 @@ def _spawn_detached(argv: list[str], log_path: Path) -> int:
     return proc.pid
 
 
+def _kill_tree(pid: int) -> None:
+    """Kill a process and its children (the runner spawns agy under a PTY)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+
 def _write_marker(ddir: Path, name: str, text: str) -> None:
     try:
         (ddir / name).write_text(text + "\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def _base_record(delegate_id: str, mode: str, workspace: str, args: argparse.Namespace, model: str) -> dict:
+    """Bookkeeping fields every delegate record shares, regardless of tier."""
+    session = _session_id(args)
+    return {
+        "id": delegate_id,
+        "mode": mode,
+        "status": "spawning",
+        "workspace": workspace,
+        "profile": args.profile,
+        "model": model,
+        "created_at": time.time(),
+        "last_activity": time.time(),
+        "turn_count": 0,
+        "originating_session": session,
+        "last_attached_session": session,
+    }
 
 
 # ── Tier 1: one-shot async ─────────────────────────────────────────────────────
@@ -215,26 +248,16 @@ def cmd_async(args: argparse.Namespace) -> int:
     ddir = delegate_dir(delegate_id)
     ddir.mkdir(parents=True, exist_ok=True)
 
-    record = {
-        "id": delegate_id,
-        "mode": "oneshot",
-        "status": "spawning",
-        "workspace": str(Path.cwd().resolve()),
-        "profile": args.profile,
-        "model": args.model or "",
-        "created_at": time.time(),
-        "last_activity": time.time(),
-        "turn_count": 0,
-        "originating_session": _session_id(args),
-        "last_attached_session": _session_id(args),
-        "timeout_seconds": args.timeout_seconds,
-        "task": args.task,
-        "context": args.context,
-        "max_lines": args.max_lines,
-        "idle_timeout_seconds": args.idle_timeout_seconds,
-        "caller": args.caller,
-        "agent_dir": args.agent_dir or "",
-    }
+    record = _base_record(delegate_id, "oneshot", str(Path.cwd().resolve()), args, args.model or "")
+    record.update(
+        timeout_seconds=args.timeout_seconds,
+        task=args.task,
+        context=args.context,
+        max_lines=args.max_lines,
+        idle_timeout_seconds=args.idle_timeout_seconds,
+        caller=args.caller,
+        agent_dir=args.agent_dir or "",
+    )
     save_record(record)
 
     pid = _spawn_detached(
@@ -299,30 +322,57 @@ def cmd_run_oneshot(args: argparse.Namespace) -> int:
         cmd += ["--agent-dir", record["agent_dir"]]
 
     started = time.time()
-    status = "done"
-    try:
-        result = subprocess.run(
-            cmd,
-            input=record.get("task") or "",
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=record.get("workspace") or None,
-            timeout=timeout + 120,  # gemini_delegate enforces its own cap; this is a backstop
-            check=False,
-        )
-        answer = (result.stdout or "").strip()
-        stderr_tail = (result.stderr or "").strip()[-2000:]
-        if result.returncode != 0:
-            status = "timeout" if "Timed out" in stderr_tail else "error"
-        if not answer:
-            answer = "(no answer produced)\n\n--- runner stderr tail ---\n" + stderr_tail
-        exit_code = result.returncode
-    except subprocess.TimeoutExpired as exc:
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=record.get("workspace") or None,
+    )
+    comm: dict = {}
+
+    def _communicate():
+        try:
+            comm["out"], comm["err"] = proc.communicate(input=record.get("task") or "")
+        except Exception as exc:  # noqa: BLE001
+            comm["err"] = str(exc)
+
+    # communicate() runs in a thread so this loop stays free to honor
+    # stop.request — a blocking run() made 'stop' a no-op for oneshots.
+    comm_thread = threading.Thread(target=_communicate, daemon=True)
+    comm_thread.start()
+    hard_deadline = started + timeout + 120  # runner enforces its own cap; backstop
+    stopped = hard_killed = False
+    while comm_thread.is_alive():
+        if (ddir / "stop.request").exists():
+            stopped = True
+            _kill_tree(proc.pid)
+            break
+        if time.time() > hard_deadline:
+            hard_killed = True
+            _kill_tree(proc.pid)
+            break
+        comm_thread.join(1)
+    comm_thread.join(15)
+
+    answer = (comm.get("out") or "").strip()
+    stderr_tail = (comm.get("err") or "").strip()[-2000:]
+    exit_code = proc.returncode if proc.returncode is not None else 1
+    if stopped:
+        status = "stopped"
+        answer = answer or "(stopped by request before the runner returned)"
+    elif hard_killed:
         status = "timeout"
-        answer = "(hard timeout hit before the runner returned)\n" + ((exc.output or "")[-2000:])
-        exit_code = 1
+        answer = answer or "(hard timeout hit before the runner returned)"
+    elif exit_code != 0:
+        status = "timeout" if "Timed out" in stderr_tail else "error"
+    else:
+        status = "done"
+    if not answer:
+        answer = "(no answer produced)\n\n--- runner stderr tail ---\n" + stderr_tail
 
     elapsed = time.time() - started
     status_line = f"status: {status} (exit {exit_code}, {elapsed:.0f}s, profile {record.get('profile')})"
@@ -380,28 +430,14 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     ddir = delegate_dir(delegate_id)
     (ddir / "steer").mkdir(parents=True, exist_ok=True)
 
-    if args.profile == "research":
-        model = args.model or gemini_delegate.RESEARCH_MODELS[0]
-    elif args.profile == "skim":
-        model = args.model or gemini_delegate.SKIM_MODELS[0]
-    else:
-        model = args.model or gemini_delegate.DEFAULT_MODELS[0]
-
-    record = {
-        "id": delegate_id,
-        "mode": "persistent",
-        "status": "spawning",
-        "workspace": str(Path(args.workspace or ".").resolve()),
-        "profile": args.profile,
-        "model": model,
-        "created_at": time.time(),
-        "last_activity": time.time(),
-        "turn_count": 0,
-        "originating_session": _session_id(args),
-        "last_attached_session": _session_id(args),
-        "idle_gc_seconds": args.idle_gc_seconds or IDLE_GC_SECONDS,
-        "max_age_seconds": args.max_age_seconds or MAX_AGE_SECONDS,
-    }
+    model = args.model or gemini_delegate.default_agy_models(args.profile)[0]
+    record = _base_record(
+        delegate_id, "persistent", str(Path(args.workspace or ".").resolve()), args, model
+    )
+    record.update(
+        idle_gc_seconds=args.idle_gc_seconds or IDLE_GC_SECONDS,
+        max_age_seconds=args.max_age_seconds or MAX_AGE_SECONDS,
+    )
     save_record(record)
 
     pid = _spawn_detached(
@@ -449,11 +485,13 @@ def _interactive_prompt(profile: str, nonce: str, task: str) -> str:
 
 
 # Lines that are TUI chrome rather than model output (repaint artifacts).
+# Every alternative is anchored to the line start so an answer line that
+# merely QUOTES chrome text (e.g. reporting a footer's wording) survives.
 _CHROME_RE = re.compile(
-    r"^[─━═]{4,}"            # box rules
-    r"|^\s*>\s*$"            # empty input prompt
-    r"|[⠀-⣿]"                # braille spinner frames
-    r"|esc to cancel|\? for shortcuts|└ Tip:|▸ Thought for"
+    r"^\s*[─━═]{4,}"          # box rules
+    r"|^\s*>\s*$"             # empty input prompt
+    r"|^\s*[⠀-⣿]"             # braille spinner frames
+    r"|^\s*(esc to cancel|\? for shortcuts|└ Tip:|▸ Thought for)"
     r"|^\s*,?\s*\d+(\.\d+)?k? tokens\s*$"  # streaming token-count stat
     r"|^\s*(Working|Generating)\.{0,3}\s*$"
 )
@@ -466,23 +504,30 @@ def _clean_answer(body: str) -> str:
     return cleaned
 
 
-def _find_answer(new_output: str, marker: str) -> str | None:
+def _marker_pattern(marker: str) -> re.Pattern:
+    """Compile the shred-tolerant matcher for a turn's nonce marker.
+
+    Whitespace is allowed between characters AND each character may repeat —
+    overlapping repaints duplicate boundary characters (observed live:
+    "...ANSWER-0ea84" / "4a" for nonce 0ea84a).
+    """
+    return re.compile("".join(f"(?:{re.escape(ch)}\\s*)+" for ch in marker))
+
+
+def _find_answer(new_output: str, pattern: re.Pattern) -> str | None:
     """Return the chrome-cleaned text after the model's assembled marker, or None.
 
     The marker is a per-turn nonce token the echo cannot contain (see
     _interactive_prompt) — but the TUI's incremental repaints can shred even
     the model's own marker across paint fragments, with whole chrome lines
     (spinner, tips, input box) landing between the pieces. Filter chrome
-    FIRST so the fragments become adjacent, then match with whitespace allowed
-    between every character AND each character allowed to repeat — overlapping
-    repaints duplicate boundary characters (observed live: "...ANSWER-0ea84" /
-    "4a" for nonce 0ea84a). The echoed instructions keep the words separated
-    by 'and' and contain no hyphens, so they still cannot match. Take
-    everything after the LAST match (earlier ones may be the model restating
-    the marker mid-reasoning).
+    FIRST so the fragments become adjacent, then match with the compiled
+    shred-tolerant pattern (see _marker_pattern). The echoed instructions
+    keep the words separated by 'and' and contain no hyphens, so they cannot
+    match. Take everything after the LAST match (earlier ones may be the
+    model restating the marker mid-reasoning).
     """
     cleaned = _clean_answer(gemini_delegate._strip_ansi(new_output))
-    pattern = re.compile("".join(f"(?:{re.escape(ch)}\\s*)+" for ch in marker))
     matches = list(pattern.finditer(cleaned))
     if not matches:
         return None
@@ -547,7 +592,9 @@ def cmd_host(args: argparse.Namespace) -> int:
     max_age = int(record.get("max_age_seconds") or MAX_AGE_SECONDS)
     buf = ""
     trust_confirmed = False
-    served = set()
+    served = set()   # steer stems handled by THIS host
+    answered = set() # stems with a response on disk (from any host generation)
+    last_chunk_at = time.time()
 
     def _update_record(**fields) -> dict:
         # Merge onto the freshest on-disk record so steer's own writes
@@ -579,102 +626,118 @@ def cmd_host(args: argparse.Namespace) -> int:
         alive.release()
         return 0
 
-    last_chunk_at = time.time()
-
-    def _pump_and_confirm_trust() -> str:
+    def _pump() -> str:
         """Read available PTY output; auto-confirm agy's first-run trust dialog."""
         nonlocal buf, trust_confirmed, last_chunk_at
         chunk = _host_read_available(pty)
         if chunk:
             buf += chunk
             last_chunk_at = time.time()
-            if not trust_confirmed and "Do you trust the contents" in buf:
-                time.sleep(0.3)
-                pty.write("\r")
-                trust_confirmed = True
+            trust_confirmed = gemini_delegate.confirm_trust_prompt(pty, buf, trust_confirmed)
         return chunk
+
+    def _next_pending() -> Path | None:
+        """Oldest unanswered steer prompt, remembering answered stems so idle
+        ticks don't re-stat every historical response file."""
+        for path in sorted((ddir / "steer").glob("*.prompt")):
+            stem = path.stem
+            if stem in served or stem in answered:
+                continue
+            if (ddir / "steer" / f"{stem}.response").exists():
+                answered.add(stem)
+                continue
+            return path
+        return None
+
+    def _serve(request: Path) -> None:
+        """Run one steer turn: inject the prompt, harvest the marker-delimited
+        answer, write the .response file."""
+        served.add(request.stem)
+        _update_record(status="busy", last_activity=time.time())
+        prompt = request.read_text(encoding="utf-8").strip()
+        nonce = uuid.uuid4().hex[:6]
+        pattern = _marker_pattern(_turn_marker(nonce))
+        # A newline submits in the interactive TUI — collapse to one line.
+        one_line = re.sub(
+            r"\s+", " ",
+            _interactive_prompt(record.get("profile", "default"), nonce, prompt),
+        )
+        marker_before = len(buf)
+        pty.write(one_line + "\r")
+        deadline = time.time() + int(record.get("steer_timeout_seconds") or 600)
+        answer = None
+        last_output = time.time()
+        last_dump = 0.0
+        while time.time() < deadline:
+            if _pump():
+                last_output = time.time()
+            if time.time() - last_dump >= 2.0:
+                # Incremental dump so a live steer can be debugged mid-turn.
+                _dump_pty_log()
+                last_dump = time.time()
+            # Marker and answer live at the stream's end; scanning a bounded
+            # tail keeps a verbose turn from going quadratic over poll ticks.
+            turn_tail = buf[max(marker_before, len(buf) - 32768):]
+            candidate = _find_answer(turn_tail, pattern)
+            if candidate is not None and time.time() - last_output >= 3.0:
+                # Marker seen and the TUI has fully quiesced — mid-repaint
+                # extraction shreds the answer into half-painted lines.
+                answer = candidate
+                break
+            if not pty.isalive():
+                break
+            if (ddir / "stop.request").exists():
+                break  # honor stop even mid-turn; outer loop finishes up
+            time.sleep(0.2)
+        if answer is not None:
+            status_line = f"status: done (turn {record.get('turn_count', 0) + 1}, model {record.get('model')})"
+            body = answer  # already chrome-cleaned by _find_answer
+        else:
+            status_line = "status: timeout (no final answer sentinel)"
+            body = gemini_delegate._strip_ansi(buf[marker_before:]).strip()[-2000:]
+        (ddir / "steer" / f"{request.stem}.response").write_text(
+            status_line + "\n\n" + body + "\n", encoding="utf-8"
+        )
+        _dump_pty_log()
+        _update_record(
+            status="idle",
+            last_activity=time.time(),
+            turn_count=record.get("turn_count", 0) + 1,
+        )
 
     while True:
         now = time.time()
-        _pump_and_confirm_trust()
+        _pump()
         if not pty.isalive():
             return _finish("dead")
         if (ddir / "stop.request").exists():
             return _finish("done")
 
-        # Scan for pending steers BEFORE the GC checks so a request arriving
+        # Look for a pending steer BEFORE the GC checks so a request arriving
         # at the idle boundary is served, not dropped by a same-tick retirement.
-        pending = sorted(
-            p for p in (ddir / "steer").glob("*.prompt")
-            if p.stem not in served and not (ddir / "steer" / f"{p.stem}.response").exists()
-        )
-        if not pending:
+        request = _next_pending()
+        if request is None:
             if now - created > max_age:
                 return _finish("done")
             if now - record.get("last_activity", created) > idle_gc:
                 return _finish("done")
-
-        # Injecting a prompt while the TUI is still booting/signing-in (or
-        # showing the trust dialog) silently loses it. Quiet-time alone is not
-        # enough — sign-in has >1s network stalls — so also require the input
-        # footer ("? for shortcuts") to have been painted at least once.
-        tui_ready = (
-            "? for shortcuts" in gemini_delegate._strip_ansi(buf[-8000:])
-            and (trust_confirmed or "Do you trust the contents" not in buf)
-            and now - last_chunk_at >= 1.0
-        )
-        if pending and tui_ready:
-            request = pending[0]
-            served.add(request.stem)
-            _update_record(status="busy", last_activity=time.time())
-            prompt = request.read_text(encoding="utf-8").strip()
-            nonce = uuid.uuid4().hex[:6]
-            marker = _turn_marker(nonce)
-            # A newline submits in the interactive TUI — collapse to one line.
-            one_line = re.sub(
-                r"\s+", " ",
-                _interactive_prompt(record.get("profile", "default"), nonce, prompt),
+            # Between turns, cap the transcript buffer: a multi-hour host would
+            # otherwise accumulate every repaint frame it ever saw. (Never trim
+            # mid-turn — _serve holds an offset into buf.)
+            if len(buf) > 131072:
+                buf = buf[-65536:]
+        else:
+            # Injecting a prompt while the TUI is still booting/signing-in (or
+            # showing the trust dialog) silently loses it. Quiet-time alone is
+            # not enough — sign-in has >1s network stalls — so also require the
+            # input footer ("? for shortcuts") to have been painted.
+            tui_ready = (
+                "? for shortcuts" in gemini_delegate._strip_ansi(buf[-8000:])
+                and (trust_confirmed or gemini_delegate.TRUST_PROMPT not in buf)
+                and now - last_chunk_at >= 1.0
             )
-            marker_before = len(buf)
-            pty.write(one_line + "\r")
-            steer_timeout = time.time() + int(record.get("steer_timeout_seconds") or 600)
-            answer = None
-            last_output = time.time()
-            last_dump = 0.0
-            while time.time() < steer_timeout:
-                piece = _pump_and_confirm_trust()
-                if piece:
-                    last_output = time.time()
-                if time.time() - last_dump >= 2.0:
-                    # Incremental dump so a live steer can be debugged mid-turn.
-                    _dump_pty_log()
-                    last_dump = time.time()
-                candidate = _find_answer(buf[marker_before:], marker)
-                if candidate is not None and time.time() - last_output >= 3.0:
-                    # Marker seen and the TUI has fully quiesced — mid-repaint
-                    # extraction shreds the answer into half-painted lines.
-                    answer = candidate
-                    break
-                if not pty.isalive():
-                    break
-                if (ddir / "stop.request").exists():
-                    break  # honor stop even mid-turn; outer loop finishes up
-                time.sleep(0.2)
-            if answer is not None:
-                status_line = f"status: done (turn {record.get('turn_count', 0) + 1}, model {record.get('model')})"
-                body = answer  # already chrome-cleaned by _find_answer
-            else:
-                status_line = "status: timeout (no final answer sentinel)"
-                body = gemini_delegate._strip_ansi(buf[marker_before:]).strip()[-2000:]
-            (ddir / "steer" / f"{request.stem}.response").write_text(
-                status_line + "\n\n" + body + "\n", encoding="utf-8"
-            )
-            _dump_pty_log()
-            _update_record(
-                status="idle",
-                last_activity=time.time(),
-                turn_count=record.get("turn_count", 0) + 1,
-            )
+            if tui_ready:
+                _serve(request)
         time.sleep(0.3)
 
 

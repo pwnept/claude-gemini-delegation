@@ -143,8 +143,18 @@ def _agy_preamble(profile: str) -> str:
     return _PROFILE_PERSONAS.get(profile, _PROFILE_PERSONAS["default"]) + _AGY_RESPONSE_FORMAT
 
 
-# Backward-compat alias (default persona) for callers importing the old name.
-_AGY_RESPONSE_PREAMBLE = _agy_preamble("default")
+def default_agy_models(profile: str) -> list:
+    """Default agy model order for a profile — the ONE profile->model mapping.
+
+    scout has no agy Gemma models, so it shares the default Flash tier.
+    """
+    if profile == "research":
+        return RESEARCH_MODELS
+    if profile == "skim":
+        return SKIM_MODELS
+    return DEFAULT_MODELS
+
+
 _WORKING_SENTINEL = "working"
 _FINAL_ANSWER_MARKER = "Final delegation answer:"
 
@@ -505,6 +515,25 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text).replace("\r\n", "\n").replace("\r", "\n")
 
 
+# agy prompts this on first run in a directory; the cursor starts on
+# "Yes, I trust this folder" so a bare Enter confirms.
+TRUST_PROMPT = "Do you trust the contents"
+
+
+def confirm_trust_prompt(pty, buf: str, already_confirmed: bool) -> bool:
+    """Auto-confirm agy's first-run trust dialog once it appears in `buf`.
+
+    Returns the new confirmed state. Single source of truth for the dialog
+    text and the settle-then-Enter keystroke, shared by the one-shot runner
+    and the persistent delegate host.
+    """
+    if already_confirmed or TRUST_PROMPT not in buf:
+        return already_confirmed
+    time.sleep(0.3)  # let the dialog finish painting before answering
+    pty.write("\r")
+    return True
+
+
 def _extract_final_answer(output: str) -> str:
     """Return the section after 'Final delegation answer:' if present, else full output."""
     lowered = output.lower()
@@ -610,12 +639,7 @@ def run_agy(
             last_activity = now
             if timing is not None and "first_chunk_at" not in timing:
                 timing["first_chunk_at"] = now
-            # agy prompts "Do you trust…" on first run in a directory;
-            # the cursor starts on "Yes, I trust this folder" so Enter confirms.
-            if not trust_confirmed and "Do you trust the contents" in buf:
-                time.sleep(0.3)
-                pty.write("\r")
-                trust_confirmed = True
+            trust_confirmed = confirm_trust_prompt(pty, buf, trust_confirmed)
             # Kill immediately when a capacity/429 signal appears — agy will go
             # idle after printing it and the idle timeout would waste 60-90s.
             if capacity_limited(buf):
@@ -1144,13 +1168,7 @@ def main() -> int:
     # backend == "agy"
     model_order = args.models
     if model_order is None:
-        if args.profile == "research":
-            model_order = ",".join(RESEARCH_MODELS)
-        elif args.profile == "skim":
-            model_order = ",".join(SKIM_MODELS)
-        else:
-            # scout profile has no agy Gemma models; fall through to default Flash
-            model_order = ",".join(DEFAULT_MODELS)
+        model_order = ",".join(default_agy_models(args.profile))
 
     models = parse_model_order(model_order)
     if not models:

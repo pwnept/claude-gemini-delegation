@@ -93,7 +93,7 @@ class TestDelegationGuard(unittest.TestCase):
 
     def test_source_checkout_guidance_uses_source_hooks(self):
         self.assertEqual(delegation_guard._HOOK_PREFIX, "hooks")
-        self.assertEqual(delegation_guard._RUNNER_PATH, "hooks/gemini_delegate.py")
+        self.assertIn("hooks/delegate_and_log.ps1", delegation_guard.GUIDANCE)
 
     def run_guard(self, payload):
         stdin = io.StringIO(json.dumps(payload))

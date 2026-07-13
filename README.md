@@ -81,7 +81,9 @@ AGENTS.md
 CLAUDE.md
 .gemini-delegation/
   delegation_config.json
+  manifest.json             <- tracks owned files outside this dir
   hooks/                    <- all hook implementations live here
+  agents/                   <- bundled agent workflows (dave, archive, memory)
 .claude/
   agents/
     dave.md                 <- Dave sub-agent, discoverable by Claude Code
@@ -89,8 +91,6 @@ CLAUDE.md
   settings.json             <- PreToolUse guard wired here
 .agents/
   rules/delegation.md       <- Antigravity workspace rule
-agents/
-  code-review-agent-dave/   <- full Dave workflow files
 ```
 
 ## Managed Markers
@@ -143,13 +143,6 @@ Claude Code and Codex should use the hook installed in the target repo:
 
 # Scout: file mapping, log parsing, dependency scanning, test discovery (read-only)
 & .gemini-delegation/hooks/delegate_and_log.ps1 "list all test files under src/" "Scout" 10 -Profile scout
-```
-
-The lower-level two-step flow (format prompt then pipe to runner):
-
-```powershell
-$prompt = & .gemini-delegation/hooks/delegate.ps1 "npm ls" "Build analysis" 5
-$prompt | py -3 .gemini-delegation/hooks/gemini_delegate.py
 ```
 
 Or use the `/delegate` slash-command in Claude Code, which runs the same

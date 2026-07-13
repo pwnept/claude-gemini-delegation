@@ -21,12 +21,10 @@ MANAGED_FILES = (
     ".gemini-delegation/hooks/analyze_metrics.py",
     ".gemini-delegation/hooks/delegation_guard.py",
     ".gemini-delegation/hooks/delegation_guard.ps1",
-    ".gemini-delegation/hooks/delegate.ps1",
+    ".gemini-delegation/hooks/resolve_python.ps1",
     ".gemini-delegation/hooks/delegate_and_log.ps1",
     ".gemini-delegation/hooks/delegate_manager.py",
     ".gemini-delegation/hooks/delegate_manager.ps1",
-    ".gemini-delegation/hooks/delegate.bat",
-    ".gemini-delegation/hooks/delegate",
     ".gemini-delegation/delegation_config.json",
     ".agents/rules/delegation.md",
     ".claude/commands/delegate.md",
@@ -39,12 +37,10 @@ HOOK_FILES = (
     "analyze_metrics.py",
     "delegation_guard.py",
     "delegation_guard.ps1",
-    "delegate.ps1",
+    "resolve_python.ps1",
     "delegate_and_log.ps1",
     "delegate_manager.py",
     "delegate_manager.ps1",
-    "delegate.bat",
-    "delegate",
 )
 
 
@@ -307,10 +303,6 @@ def copy_shared_hooks(project_dir: Path) -> Path:
         if not source.is_file():
             raise InstallError(f"Required hook template is missing: {source}")
         shutil.copy2(source, dest_hooks / name)
-    try:
-        (dest_hooks / "delegate").chmod(0o755)
-    except OSError:
-        pass
     config_path = project_dir / ".gemini-delegation" / "delegation_config.json"
     existing_config: dict = {}
     if config_path.exists():

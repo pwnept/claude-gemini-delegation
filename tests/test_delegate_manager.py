@@ -5,7 +5,6 @@ Run with: python3 -m unittest discover tests
 
 import io
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -16,6 +15,19 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent.parent / "hooks"))
 
 import delegate_manager  # noqa: E402
+
+
+class FakePopen:
+    """Stand-in for the runner child process cmd_run_oneshot supervises."""
+
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.pid = 4321
+        self._out = stdout
+        self._err = stderr
+
+    def communicate(self, input=None):
+        return self._out, self._err
 
 
 class DelegateManagerCase(unittest.TestCase):
@@ -52,11 +64,8 @@ class TestAsyncOneshot(DelegateManagerCase):
     def test_run_oneshot_writes_condensed_result_and_done_marker(self):
         delegate_id = self._fire_async()
 
-        fake = subprocess.CompletedProcess(
-            args=["python"], returncode=0,
-            stdout="Final answer body: X lives in src/x.py\n", stderr="",
-        )
-        with mock.patch.object(delegate_manager.subprocess, "run", return_value=fake):
+        fake = FakePopen(returncode=0, stdout="Final answer body: X lives in src/x.py\n")
+        with mock.patch.object(delegate_manager.subprocess, "Popen", return_value=fake):
             code = delegate_manager.main(["run-oneshot", delegate_id])
 
         self.assertEqual(code, 0)
@@ -70,11 +79,11 @@ class TestAsyncOneshot(DelegateManagerCase):
     def test_run_oneshot_timeout_is_reported_in_done_marker(self):
         delegate_id = self._fire_async()
 
-        fake = subprocess.CompletedProcess(
-            args=["python"], returncode=1, stdout="",
+        fake = FakePopen(
+            returncode=1,
             stderr="Gemini 3.5 Flash (High): Timed out (idle>60s or >600s total)",
         )
-        with mock.patch.object(delegate_manager.subprocess, "run", return_value=fake):
+        with mock.patch.object(delegate_manager.subprocess, "Popen", return_value=fake):
             code = delegate_manager.main(["run-oneshot", delegate_id])
 
         self.assertEqual(code, 1)
@@ -243,13 +252,13 @@ class TestAnswerDetection(unittest.TestCase):
         self.assertNotIn(marker, prompt)
         # Even a pathological hard-wrap of the echo yields no match.
         wrapped = "\n".join(prompt[i:i + 40] for i in range(0, len(prompt), 40))
-        self.assertIsNone(delegate_manager._find_answer(wrapped, marker))
+        self.assertIsNone(delegate_manager._find_answer(wrapped, delegate_manager._marker_pattern(marker)))
 
     def test_marker_line_yields_remainder(self):
         marker = delegate_manager._turn_marker("4f2a01")
         output = f"working\nsearching files\n{marker}\nhooks/gemini_delegate.py\n"
         self.assertEqual(
-            delegate_manager._find_answer(output, marker),
+            delegate_manager._find_answer(output, delegate_manager._marker_pattern(marker)),
             "hooks/gemini_delegate.py",
         )
 
@@ -257,7 +266,7 @@ class TestAnswerDetection(unittest.TestCase):
         marker = delegate_manager._turn_marker("4f2a01")
         output = f"working\n● {marker}\n  the answer body\n"
         self.assertEqual(
-            delegate_manager._find_answer(output, marker), "the answer body"
+            delegate_manager._find_answer(output, delegate_manager._marker_pattern(marker)), "the answer body"
         )
 
     def test_marker_shredded_by_tui_repaints_still_matches(self):
@@ -278,7 +287,7 @@ class TestAnswerDetection(unittest.TestCase):
             "  hooks/gemini_delegate.py\n"
         )
         self.assertEqual(
-            delegate_manager._find_answer(output, marker),
+            delegate_manager._find_answer(output, delegate_manager._marker_pattern(marker)),
             "hooks/gemini_delegate.py",
         )
 
@@ -297,7 +306,7 @@ class TestAnswerDetection(unittest.TestCase):
             "  gemini_delegate.py\n"
         )
         self.assertEqual(
-            delegate_manager._find_answer(output, marker),
+            delegate_manager._find_answer(output, delegate_manager._marker_pattern(marker)),
             "gemini_delegate.py",
         )
 
@@ -316,9 +325,27 @@ class TestAnswerDetection(unittest.TestCase):
             "hooks/gemini_delegate.py\ntests/test_gemini_delegate.py",
         )
 
+    def test_answer_lines_quoting_chrome_text_survive(self):
+        # Chrome patterns are line-start anchored: an answer that QUOTES
+        # footer text must not lose the line.
+        body = (
+            "The footer reads 'esc to cancel' while generating\n"
+            "and '? for shortcuts' when idle.\n"
+            "esc to cancelGemini 3.5 Flash (High)\n"
+        )
+        self.assertEqual(
+            delegate_manager._clean_answer(body),
+            "The footer reads 'esc to cancel' while generating\n"
+            "and '? for shortcuts' when idle.",
+        )
+
     def test_marker_without_body_returns_none(self):
         marker = delegate_manager._turn_marker("4f2a01")
-        self.assertIsNone(delegate_manager._find_answer(f"working\n{marker}\n", marker))
+        self.assertIsNone(
+            delegate_manager._find_answer(
+                f"working\n{marker}\n", delegate_manager._marker_pattern(marker)
+            )
+        )
 
 
 if __name__ == "__main__":

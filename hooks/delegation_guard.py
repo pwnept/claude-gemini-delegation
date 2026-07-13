@@ -30,11 +30,6 @@ _default_prefix = (
     else _script_parent_name + "/hooks"
 )
 _HOOK_PREFIX = os.environ.get("DELEGATION_HOOK_PREFIX") or _default_prefix
-_RUNNER_PATH = (
-    _HOOK_PREFIX + "/gemini_delegate.py"
-    if _HOOK_PREFIX in ("hooks", ".gemini-delegation/hooks")
-    else ".gemini-delegation/hooks/gemini_delegate.py"
-)
 
 PATTERNS = [
     (re.compile(r"\bnpm\s+ls\b"), "npm ls"),
@@ -51,10 +46,6 @@ GUIDANCE = f"""This command matches a delegation pattern. Use agy instead.
 IMPORTANT: Use the PowerShell tool — NOT the Bash tool. Bash routes to Git Bash on Windows and cannot run .ps1 scripts.
 
 PowerShell tool:
-  $prompt = & {_HOOK_PREFIX}/delegate.ps1 "<task>" "<context>"
-  $prompt | py -3 {_RUNNER_PATH}
-
-Or with validation/metrics (PowerShell tool):
   & {_HOOK_PREFIX}/delegate_and_log.ps1 "<task>" "<context>" 10
 
 Add -Profile research for documentation lookup or web search.
