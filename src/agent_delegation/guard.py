@@ -9,7 +9,32 @@ from .cli import ALLOW_ENV, DEPTH_ENV
 from .policy import DEFAULT_POLICY
 
 
-FORBIDDEN_SYNTAX = (";", "&&", "||", "|", ">", "<", "`", "$(", "\n", "\r")
+FORBIDDEN_SYNTAX = (
+    ";",
+    "&&",
+    "||",
+    "|",
+    ">",
+    "<",
+    "`",
+    "$(",
+    "(",
+    ")",
+    "{",
+    "}",
+    "$",
+    "\n",
+    "\r",
+)
+
+FORBIDDEN_ARGUMENTS = {
+    "--output",
+    "--exec",
+    "--exec-batch",
+    "-x",
+    "-X",
+    "--pre",
+}
 
 
 def _command_from_payload(payload: dict) -> str:
@@ -43,6 +68,16 @@ def is_allowed(command: str, prefixes: list[list[str]]) -> tuple[bool, str]:
     if tokens[0].lower() in denied:
         return False, f"{tokens[0]} is permanently denied"
     lowered = [token.lower() for token in tokens]
+    denied_prefixes = [
+        [str(token).lower() for token in item]
+        for item in DEFAULT_POLICY["permanent_denied_prefixes"]
+    ]
+    if any(lowered[: len(prefix)] == prefix for prefix in denied_prefixes):
+        return False, "command is permanently denied"
+    for token in lowered[1:]:
+        name = token.split("=", 1)[0]
+        if name in FORBIDDEN_ARGUMENTS:
+            return False, f"argument {name} is denied"
     for prefix in prefixes:
         candidate = [str(token).lower() for token in prefix]
         if lowered[: len(candidate)] == candidate:

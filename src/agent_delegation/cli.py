@@ -104,7 +104,7 @@ def _native_transcripts() -> dict[str, tuple[int, int]]:
     if not brain.is_dir():
         return {}
     result: dict[str, tuple[int, int]] = {}
-    for path in brain.glob("*/.system_generated/logs/transcript_full.jsonl"):
+    for path in brain.glob("*/.system_generated/logs/*.jsonl"):
         try:
             stat = path.stat()
             result[str(path)] = (stat.st_size, stat.st_mtime_ns)

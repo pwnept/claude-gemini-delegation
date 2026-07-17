@@ -51,6 +51,26 @@ DEFAULT_POLICY = {
         "Invoke-Expression",
         "Start-Process",
     ],
+    "permanent_denied_prefixes": [
+        ["git", "add"],
+        ["git", "apply"],
+        ["git", "branch"],
+        ["git", "checkout"],
+        ["git", "clean"],
+        ["git", "commit"],
+        ["git", "fetch"],
+        ["git", "merge"],
+        ["git", "mv"],
+        ["git", "pull"],
+        ["git", "push"],
+        ["git", "rebase"],
+        ["git", "reset"],
+        ["git", "restore"],
+        ["git", "rm"],
+        ["git", "stash"],
+        ["git", "switch"],
+        ["git", "tag"],
+    ],
 }
 
 
@@ -97,6 +117,7 @@ def load_policy() -> dict:
         "schema": 1,
         "command_prefixes": prefixes,
         "permanent_denials": list(DEFAULT_POLICY["permanent_denials"]),
+        "permanent_denied_prefixes": list(DEFAULT_POLICY["permanent_denied_prefixes"]),
     }
 
 
@@ -118,9 +139,17 @@ def command_prefixes(policy: dict, extensions: list[str]) -> list[list[str]]:
             prefixes.append(raw)
     prefixes.extend(parse_prefix(value) for value in extensions)
     denied = {item.lower() for item in policy.get("permanent_denials", [])}
+    denied_prefixes = [
+        [str(token).lower() for token in item]
+        for item in policy.get("permanent_denied_prefixes", [])
+        if isinstance(item, list)
+    ]
     for prefix in prefixes:
         if prefix[0].lower() in denied:
             raise ValueError(f"Command is permanently denied for delegates: {prefix[0]}")
+        lowered = [token.lower() for token in prefix]
+        if any(lowered[: len(item)] == item for item in denied_prefixes):
+            raise ValueError(f"Command prefix is permanently denied for delegates: {' '.join(prefix)}")
     unique = []
     seen = set()
     for prefix in prefixes:
@@ -129,4 +158,3 @@ def command_prefixes(policy: dict, extensions: list[str]) -> list[list[str]]:
             unique.append(prefix)
             seen.add(key)
     return unique
-
