@@ -34,6 +34,11 @@ FORBIDDEN_ARGUMENTS = {
     "-x",
     "-X",
     "--pre",
+    "--ext-diff",
+    "--textconv",
+    "--open-files-in-pager",
+    "--paginate",
+    "--show-signature",
 }
 
 

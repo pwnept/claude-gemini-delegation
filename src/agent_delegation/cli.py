@@ -224,7 +224,9 @@ def _temporary_environment(values: dict[str, str]):
                 os.environ[key] = value
 
 
-def _invoke_runner(args: argparse.Namespace, prompt: str, run_dir: Path, caller: str) -> tuple[int, str]:
+def _invoke_runner(
+    args: argparse.Namespace, prompt: str, run_dir: Path, caller: str
+) -> tuple[int, str, str, str | None]:
     from . import runner
 
     runner_args = [
@@ -251,13 +253,27 @@ def _invoke_runner(args: argparse.Namespace, prompt: str, run_dir: Path, caller:
 
     previous_argv = sys.argv
     output = io.StringIO()
+    errors = io.StringIO()
+    live_errors = sys.stderr
+
+    class Tee:
+        def write(self, value: str) -> int:
+            live_errors.write(value)
+            errors.write(value)
+            return len(value)
+
+        def flush(self) -> None:
+            live_errors.flush()
+            errors.flush()
+
     try:
+        runner.LAST_MODEL_USED = None
         sys.argv = runner_args
-        with contextlib.redirect_stdout(output):
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(Tee()):
             code = runner.main()
     finally:
         sys.argv = previous_argv
-    return code, output.getvalue()
+    return code, output.getvalue(), errors.getvalue(), runner.LAST_MODEL_USED
 
 
 def run_command(args: argparse.Namespace) -> int:
@@ -287,19 +303,38 @@ def run_command(args: argparse.Namespace) -> int:
     old_cwd = Path.cwd()
     code = 2
     response = ""
+    runner_stderr = ""
+    worker_model = None
     native: list[dict] = []
+    run_error = None
+    archive_error = None
     try:
         os.chdir(workspace)
         with _temporary_environment(environment):
-            code, response = _invoke_runner(args, prompt, run_dir, caller)
-        native = _archive_native_transcripts(before, run_dir) if args.backend == "agy" else []
+            code, response, runner_stderr, worker_model = _invoke_runner(args, prompt, run_dir, caller)
+    except BaseException as exc:  # noqa: BLE001 - interruptions must still produce a durable run record.
+        run_error = f"{type(exc).__name__}: {exc}"
+        code = 130 if isinstance(exc, KeyboardInterrupt) else 2
     finally:
+        if args.backend == "agy":
+            try:
+                native = _archive_native_transcripts(before, run_dir)
+            except Exception as exc:  # noqa: BLE001 - native state stays untouched; record copy failure.
+                archive_error = f"{type(exc).__name__}: {exc}"
+                code = 2
         os.chdir(old_cwd)
 
     exchange = run_dir / "exchange.jsonl"
     records = [
         {"type": "prompt", "text": prompt},
-        {"type": "response", "text": response, "exit_code": code},
+        {
+            "type": "response",
+            "text": response,
+            "stderr": runner_stderr,
+            "exit_code": code,
+            "error": run_error,
+            "native_archive_error": archive_error,
+        },
     ]
     exchange.write_text("".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records), encoding="utf-8")
     manifest = {
@@ -309,6 +344,7 @@ def run_command(args: argparse.Namespace) -> int:
         "caller": caller,
         "backend": args.backend,
         "profile": args.profile,
+        "worker_model": worker_model,
         "workspace": str(workspace),
         "depth": 1,
         "allowed_command_prefixes": prefixes,
@@ -317,11 +353,18 @@ def run_command(args: argparse.Namespace) -> int:
         "exchange_jsonl": str(exchange),
         "exchange_sha256": _sha256(exchange),
         "native_transcripts": native,
+        "run_error": run_error,
+        "runner_stderr": runner_stderr,
+        "native_archive_error": archive_error,
         "native_state_modified_by_agent_delegation": False,
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     if response:
         sys.stdout.write(response)
+    if run_error:
+        print(f"[ERROR] Delegate failed: {run_error}", file=sys.stderr)
+    if archive_error:
+        print(f"[ERROR] Native transcript archive failed: {archive_error}", file=sys.stderr)
     print(f"[agent-delegation run: {run_dir}]", file=sys.stderr)
     return code
 

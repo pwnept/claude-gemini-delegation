@@ -91,6 +91,7 @@ LITE_MODELS = {"gemini-3.1-flash-lite", "gemini-2.5-flash-lite"}
 # one run_<backend>() + run_<backend>_backend() pair, one branch in main(),
 # and a new entry in this tuple.
 BACKENDS = ("agy", "gemini-cli", "gemini-api")
+LAST_MODEL_USED: str | None = None
 
 # Caller detection and log-dir routing live in delegation_caller.py (shared
 # with post_delegate.py and analyze_metrics.py) to avoid dict duplication.
@@ -563,9 +564,13 @@ def run_agy(
             stderr="",
         )
 
+    exit_status = pty.get_exitstatus()
+    if exit_status is None:
+        exit_status = 1
+
     return subprocess.CompletedProcess(
         args=[command, "--add-dir", workspace_dir, "--model", model, "-p", "..."],
-        returncode=0,
+        returncode=exit_status,
         stdout=stdout,
         stderr="",
     )
@@ -791,6 +796,8 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
     `on_success(output, model)` is called once on the first successful response
     (respects --no-save).
     """
+    global LAST_MODEL_USED
+    LAST_MODEL_USED = None
     state = {"cooldowns": {}} if args.no_state else load_state(state_path)
     now = time.time()
     skipped = []
@@ -806,6 +813,7 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
             continue
 
         print("Trying model: {0}".format(model), file=sys.stderr)
+        LAST_MODEL_USED = model
         try:
             result = attempt(model)
         except subprocess.TimeoutExpired as exc:
