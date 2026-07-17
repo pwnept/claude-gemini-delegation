@@ -110,13 +110,40 @@ class TestGlobalCli(unittest.TestCase):
     def test_install_creates_managed_and_local_policy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             agy_root = str(Path(tmpdir) / "agy")
-            env = {"AGENT_DELEGATION_HOME": tmpdir, "AGENT_DELEGATION_AGY_ROOT": agy_root}
+            agy_config_root = str(Path(tmpdir) / "agy-config")
+            env = {
+                "AGENT_DELEGATION_HOME": tmpdir,
+                "AGENT_DELEGATION_AGY_ROOT": agy_root,
+                "AGENT_DELEGATION_AGY_CONFIG_ROOT": agy_config_root,
+            }
+            config_hooks = Path(agy_config_root) / "hooks.json"
+            config_hooks.parent.mkdir(parents=True)
+            config_hooks.write_text(json.dumps({"existing-hook": {"enabled": True}}), encoding="utf-8")
+            old_hooks = Path(agy_root) / "hooks.json"
+            old_hooks.parent.mkdir(parents=True)
+            old_hooks.write_text('{"legacy": true}', encoding="utf-8")
             with mock.patch.dict(os.environ, env, clear=True):
                 self.assertEqual(cli.main(["install", "--force"]), 0)
                 self.assertTrue((Path(tmpdir) / "policy.json").is_file())
                 self.assertTrue((Path(tmpdir) / "policy.local.json").is_file())
-                hooks = json.loads((Path(agy_root) / "hooks.json").read_text(encoding="utf-8"))
+                hooks = json.loads(config_hooks.read_text(encoding="utf-8"))
                 self.assertIn("agent-delegation-command-policy", hooks)
+                self.assertIn("existing-hook", hooks)
+                self.assertEqual(old_hooks.read_text(encoding="utf-8"), '{"legacy": true}')
+
+    def test_install_rejects_non_object_agy_hooks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_root = Path(tmpdir) / "agy-config"
+            config_root.mkdir()
+            hooks = config_root / "hooks.json"
+            hooks.write_text("[]", encoding="utf-8")
+            env = {
+                "AGENT_DELEGATION_HOME": str(Path(tmpdir) / "home"),
+                "AGENT_DELEGATION_AGY_CONFIG_ROOT": str(config_root),
+            }
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertEqual(cli.main(["install", "--force"]), 2)
+            self.assertEqual(hooks.read_text(encoding="utf-8"), "[]")
 
     def test_disable_and_enable_use_local_git_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:

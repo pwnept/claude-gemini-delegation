@@ -120,8 +120,15 @@ def _agy_root() -> Path:
     return Path.home() / ".gemini" / "antigravity-cli"
 
 
+def _agy_config_root() -> Path:
+    configured = os.environ.get("AGENT_DELEGATION_AGY_CONFIG_ROOT")
+    if configured:
+        return Path(os.path.expandvars(os.path.expanduser(configured))).resolve()
+    return Path.home() / ".gemini" / "config"
+
+
 def _install_agy_hook() -> Path:
-    root = _agy_root()
+    root = _agy_config_root()
     root.mkdir(parents=True, exist_ok=True)
     path = root / "hooks.json"
     hooks = {}
@@ -130,6 +137,8 @@ def _install_agy_hook() -> Path:
             loaded = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 hooks = loaded
+            else:
+                raise CliError(f"Cannot update agy hooks file {path}: top level must be an object")
         except ValueError as exc:
             raise CliError(f"Cannot update invalid agy hooks file {path}: {exc}") from exc
     hooks["agent-delegation-command-policy"] = {
@@ -394,7 +403,7 @@ def status_command(args: argparse.Namespace) -> int:
         "depth": _depth(),
         "caller": detect_caller() or "unknown",
         "policy": str(global_home() / "policy.json"),
-        "agy_hook": str(_agy_root() / "hooks.json"),
+        "agy_hook": str(_agy_config_root() / "hooks.json"),
     }
     print(json.dumps(payload, indent=2))
     return 0
