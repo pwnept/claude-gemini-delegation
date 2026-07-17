@@ -167,7 +167,7 @@ class TestGlobalCli(unittest.TestCase):
                 self.assertIn("agent-delegation-command-policy", hooks)
                 self.assertIn("existing-hook", hooks)
                 matcher = hooks["agent-delegation-command-policy"]["PreToolUse"][0]["matcher"]
-                self.assertEqual(matcher, "bash|run_command")
+                self.assertEqual(matcher, "Bash|run_command")
                 self.assertEqual(old_hooks.read_text(encoding="utf-8"), '{"legacy": true}')
 
     def test_install_rejects_non_object_agy_hooks(self):
