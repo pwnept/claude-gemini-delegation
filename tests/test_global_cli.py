@@ -30,6 +30,10 @@ class TestGlobalPolicy(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.command_prefixes(policy.DEFAULT_POLICY, ["pwsh -File anything.ps1"])
 
+    def test_write_git_extension_is_permanently_denied(self):
+        with self.assertRaises(ValueError):
+            policy.command_prefixes(policy.DEFAULT_POLICY, ["git commit"])
+
 
 class TestCommandGuard(unittest.TestCase):
     def test_allows_reviewed_prefix(self):
@@ -43,6 +47,11 @@ class TestCommandGuard(unittest.TestCase):
     def test_denies_compound_command(self):
         allowed, _ = guard.is_allowed("rg needle .; Remove-Item file", [["rg"]])
         self.assertFalse(allowed)
+
+    def test_denies_write_or_execution_flags(self):
+        self.assertFalse(guard.is_allowed("git diff --output=result.txt", [["git", "diff"]])[0])
+        self.assertFalse(guard.is_allowed("rg --pre helper needle .", [["rg"]])[0])
+        self.assertFalse(guard.is_allowed("fd pattern --exec Remove-Item", [["fd"]])[0])
 
     def test_guard_is_inactive_for_main_caller(self):
         with mock.patch.dict(os.environ, {cli.DEPTH_ENV: "0"}, clear=True):
