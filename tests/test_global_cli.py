@@ -12,14 +12,18 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_delegation import cli, guard, policy  # noqa: E402
+from agent_delegation import cli, guard, policy, runner  # noqa: E402
 
 
 class TestGlobalPolicy(unittest.TestCase):
     def test_default_policy_is_read_only(self):
         rendered = {tuple(item) for item in policy.DEFAULT_POLICY["command_prefixes"]}
         self.assertIn(("rg",), rendered)
-        self.assertIn(("git", "diff"), rendered)
+        self.assertIn(("git", "--no-pager", "diff", "--no-ext-diff", "--no-textconv"), rendered)
+        self.assertIn(
+            ("git", "--no-pager", "log", "--no-ext-diff", "--no-textconv", "--no-show-signature"),
+            rendered,
+        )
         self.assertNotIn(("git", "commit"), rendered)
 
     def test_run_scoped_extension_is_added(self):
@@ -34,10 +38,19 @@ class TestGlobalPolicy(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.command_prefixes(policy.DEFAULT_POLICY, ["git commit"])
 
+    def test_execution_bearing_git_forms_are_permanently_denied(self):
+        for prefix in ("git diff", "git show", "git log", "git grep"):
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(ValueError):
+                    policy.command_prefixes(policy.DEFAULT_POLICY, [prefix])
+
 
 class TestCommandGuard(unittest.TestCase):
     def test_allows_reviewed_prefix(self):
-        allowed, _ = guard.is_allowed("git diff --stat", [["git", "diff"]])
+        allowed, _ = guard.is_allowed(
+            "git --no-pager diff --no-ext-diff --no-textconv --stat",
+            [["git", "--no-pager", "diff", "--no-ext-diff", "--no-textconv"]],
+        )
         self.assertTrue(allowed)
 
     def test_denies_unlisted_command(self):
@@ -52,6 +65,12 @@ class TestCommandGuard(unittest.TestCase):
         self.assertFalse(guard.is_allowed("git diff --output=result.txt", [["git", "diff"]])[0])
         self.assertFalse(guard.is_allowed("rg --pre helper needle .", [["rg"]])[0])
         self.assertFalse(guard.is_allowed("fd pattern --exec Remove-Item", [["fd"]])[0])
+        self.assertFalse(guard.is_allowed("git diff --ext-diff", [["git", "diff"]])[0])
+        self.assertFalse(guard.is_allowed("git show --textconv", [["git", "show"]])[0])
+        self.assertFalse(guard.is_allowed("git log --show-signature", [["git", "log"]])[0])
+        self.assertFalse(
+            guard.is_allowed("git grep --open-files-in-pager=calc needle", [["git", "grep"]])[0]
+        )
 
     def test_guard_is_inactive_for_main_caller(self):
         with mock.patch.dict(os.environ, {cli.DEPTH_ENV: "0"}, clear=True):
@@ -126,7 +145,7 @@ class TestGlobalCli(unittest.TestCase):
             ]
             env = {"AGENT_DELEGATION_HOME": str(home)}
             with mock.patch.dict(os.environ, env, clear=False):
-                with mock.patch.object(cli, "_invoke_runner", return_value=(0, "result\n")):
+                with mock.patch.object(cli, "_invoke_runner", return_value=(0, "result\n", "", "model-a")):
                     with mock.patch.object(cli, "_native_transcripts", return_value={}):
                         self.assertEqual(cli.main(args), 0)
 
@@ -135,14 +154,127 @@ class TestGlobalCli(unittest.TestCase):
             manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
             self.assertEqual(manifest["depth"], 1)
             self.assertEqual(manifest["caller_extensions"], ["python -m pytest"])
+            self.assertEqual(manifest["worker_model"], "model-a")
             self.assertFalse(manifest["native_state_modified_by_agent_delegation"])
             exchange = Path(manifest["exchange_jsonl"])
             lines = exchange.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 2)
             self.assertEqual(json.loads(lines[1])["text"], "result\n")
 
+    def test_nonzero_runner_stderr_and_attempted_model_are_recorded(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "repo"
+            home = root / "home"
+            workspace.mkdir()
+            subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
+            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
+                with mock.patch.object(
+                    cli, "_invoke_runner", return_value=(7, "", "authentication failed\n", "model-b")
+                ):
+                    with mock.patch.object(cli, "_native_transcripts", return_value={}):
+                        self.assertEqual(cli.main(args), 7)
+
+            manifest_path = next(home.glob("runs/codex/repo/*/manifest.json"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["worker_model"], "model-b")
+            self.assertEqual(manifest["runner_stderr"], "authentication failed\n")
+            response_record = json.loads(
+                Path(manifest["exchange_jsonl"]).read_text(encoding="utf-8").splitlines()[1]
+            )
+            self.assertEqual(response_record["stderr"], "authentication failed\n")
+
+    def test_invoke_runner_tees_stderr_live(self):
+        args = Namespace(
+            backend="agy",
+            profile="balanced",
+            timeout=2,
+            idle_timeout=1,
+            model=None,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            live = StringIO()
+            with mock.patch.object(runner, "main", side_effect=lambda: print("trying model", file=sys.stderr) or 7):
+                with mock.patch("sys.stderr", live):
+                    code, _, captured, _ = cli._invoke_runner(args, "task", Path(tmpdir), "codex")
+        self.assertEqual(code, 7)
+        self.assertEqual(captured, "trying model\n")
+        self.assertEqual(live.getvalue(), "trying model\n")
+
+    def test_runner_failure_still_writes_manifest_and_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "repo"
+            home = root / "home"
+            workspace.mkdir()
+            subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
+            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
+                with mock.patch.object(cli, "_invoke_runner", side_effect=RuntimeError("worker crashed")):
+                    with mock.patch.object(cli, "_native_transcripts", return_value={}):
+                        self.assertEqual(cli.main(args), 2)
+
+            manifest_path = next(home.glob("runs/codex/repo/*/manifest.json"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["exit_code"], 2)
+            self.assertIn("worker crashed", manifest["run_error"])
+            self.assertTrue(Path(manifest["exchange_jsonl"]).is_file())
+
+    def test_archive_failure_is_recorded_without_hiding_run(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "repo"
+            home = root / "home"
+            workspace.mkdir()
+            subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
+            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
+                with mock.patch.object(cli, "_invoke_runner", return_value=(0, "result\n", "", "model-a")):
+                    with mock.patch.object(cli, "_native_transcripts", return_value={}):
+                        with mock.patch.object(
+                            cli, "_archive_native_transcripts", side_effect=OSError("copy failed")
+                        ):
+                            self.assertEqual(cli.main(args), 2)
+
+            manifest_path = next(home.glob("runs/codex/repo/*/manifest.json"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertIn("copy failed", manifest["native_archive_error"])
+
+    def test_keyboard_interrupt_still_writes_manifest_and_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "repo"
+            home = root / "home"
+            workspace.mkdir()
+            subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
+            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
+                with mock.patch.object(cli, "_invoke_runner", side_effect=KeyboardInterrupt()):
+                    with mock.patch.object(cli, "_native_transcripts", return_value={}):
+                        self.assertEqual(cli.main(args), 130)
+
+            manifest_path = next(home.glob("runs/codex/repo/*/manifest.json"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["exit_code"], 130)
+            self.assertIn("KeyboardInterrupt", manifest["run_error"])
+            self.assertTrue(Path(manifest["exchange_jsonl"]).is_file())
+
 
 class TestBackendSafety(unittest.TestCase):
+    def test_failed_attempt_records_model(self):
+        args = Namespace(
+            no_state=True,
+            idle_timeout_seconds=1,
+            timeout_seconds=2,
+            cooldown_seconds=300,
+            show_model=False,
+            no_save=True,
+        )
+        attempt = mock.Mock(return_value=subprocess.CompletedProcess([], 7, stdout="", stderr="failed"))
+        self.assertEqual(runner.run_with_fallback(["model-b"], Path("unused"), args, attempt), 7)
+        self.assertEqual(runner.LAST_MODEL_USED, "model-b")
+
     def test_runner_contains_sandbox_and_no_bypass_flags(self):
         source = (Path(__file__).resolve().parents[1] / "src" / "agent_delegation" / "runner.py").read_text(
             encoding="utf-8"
@@ -152,6 +284,13 @@ class TestBackendSafety(unittest.TestCase):
         skip = "--" + "skip-trust"
         self.assertNotIn(forbidden, source)
         self.assertNotIn(skip, source)
+
+    def test_windows_pty_exit_status_is_preserved(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "agent_delegation" / "runner.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("pty.get_exitstatus()", source)
+        self.assertIn("returncode=exit_status", source)
 
 
 if __name__ == "__main__":
