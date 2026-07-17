@@ -145,7 +145,7 @@ def _install_agy_hook() -> Path:
         "enabled": True,
         "PreToolUse": [
             {
-                "matcher": "run_command",
+                "matcher": "bash|run_command",
                 "hooks": [
                     {
                         "type": "command",
