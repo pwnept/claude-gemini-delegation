@@ -11,7 +11,7 @@ param(
 )
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-# .gemini-delegation dir (parent of hooks/) — passed to Python hooks so they
+# .gemini-delegation dir (parent of hooks/) - passed to Python hooks so they
 # skip the per-call cwd up-walk (path-discovery optimization).
 $AgentDir  = Split-Path -Parent $ScriptDir
 $script:LastPythonExitCode = 0

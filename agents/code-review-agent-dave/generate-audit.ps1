@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 
 # generate-audit.ps1
-# Runs Dave in headless mode — exhaustive, pedantic audit.
+# Runs Dave in headless mode - exhaustive, pedantic audit.
 # Flags everything to minimise iteration rounds.
 
 $AgentDir = Split-Path -Parent $MyInvocation.MyCommand.Path

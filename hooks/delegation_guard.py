@@ -48,7 +48,7 @@ PATTERNS = [
 
 GUIDANCE = f"""This command matches a delegation pattern. Use agy instead.
 
-IMPORTANT: Use the PowerShell tool — NOT the Bash tool. Bash routes to Git Bash on Windows and cannot run .ps1 scripts.
+IMPORTANT: Use the PowerShell tool - NOT the Bash tool. Bash routes to Git Bash on Windows and cannot run .ps1 scripts.
 
 PowerShell tool:
   $prompt = & {_HOOK_PREFIX}/delegate.ps1 "<task>" "<context>"

@@ -94,7 +94,7 @@ class TestTargetInstall(unittest.TestCase):
 
 class TestAgentsSection(unittest.TestCase):
     def test_slim_agents_section_is_concise(self):
-        """The AGENTS.md managed block must be short — it's always-on context."""
+        """The AGENTS.md managed block must be short - it's always-on context."""
         content = agents_section()
         inner_lines = [
             line for line in content.splitlines()
@@ -110,7 +110,7 @@ class TestAgentsSection(unittest.TestCase):
         self.assertIn(AGENTS_MARKER_END, content)
 
     def test_agents_section_has_no_caller_flag(self):
-        """Call instruction must be identical for every harness — no -Caller in examples."""
+        """Call instruction must be identical for every harness - no -Caller in examples."""
         content = agents_section()
         self.assertNotIn("-Caller", content)
 

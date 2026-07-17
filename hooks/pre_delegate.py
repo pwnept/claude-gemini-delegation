@@ -78,7 +78,7 @@ def estimate_compression(task: str) -> int:
 
 _POWERSHELL_NOTE = (
     "PLATFORM: Windows PowerShell 5.1. "
-    "Do NOT use && — it is unsupported. "
+    "Do NOT use && - it is unsupported. "
     "Use ; for sequential commands or `if ($LASTEXITCODE -eq 0) { ... }` for conditional chaining."
 )
 

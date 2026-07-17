@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run agy (Antigravity) CLI with model-pool fallback.
+Run a sandboxed worker backend with model-pool fallback.
 
 Usage:
     python gemini_delegate.py [prompt]
@@ -96,7 +96,7 @@ BACKENDS = ("agy", "gemini-cli", "gemini-api")
 # with post_delegate.py and analyze_metrics.py) to avoid dict duplication.
 # detect_caller() auto-detects the harness from DELEGATION_CALLER env token
 # (set by installer) with a vendor-env-sniff fallback.
-from delegation_caller import detect_caller, resolve_log_dir  # noqa: E402
+from .caller import detect_caller, resolve_log_dir  # noqa: E402
 
 CAPACITY_PATTERNS = (
     "exhausted your capacity",
@@ -632,7 +632,7 @@ def _delegation_log_root() -> Path:
     configured = os.environ.get("DELEGATION_LOG_ROOT")
     if configured:
         return Path(os.path.expandvars(os.path.expanduser(configured)))
-    return Path.home() / ".gemini_delegation"
+    return Path.home() / ".agent-delegation"
 
 
 def _write_numbered_delegation_log(log_dir: Path, turn_slug: str, content: str) -> Path:
@@ -661,7 +661,8 @@ def _save_delegation_transcript(
         return None
 
     try:
-        repo_root = agent_dir.parent
+        configured_workspace = os.environ.get("AGENT_DELEGATION_WORKSPACE")
+        repo_root = Path(configured_workspace).resolve() if configured_workspace else agent_dir.parent
         context = _load_caller_session(agent_dir)
         caller = _safe_path_part(_caller_name(args, context))
         project_slug = _project_slug(repo_root)
@@ -672,7 +673,7 @@ def _save_delegation_transcript(
             / "runs"
             / caller
             / project_slug
-            / f"{session_slug}_gemini_delegation"
+            / f"{session_slug}_agent_delegation"
         )
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         content = "\n".join(
@@ -706,7 +707,7 @@ def _save_delegation_transcript(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run agy CLI with capacity-aware model fallback.")
+    parser = argparse.ArgumentParser(description="Run a sandboxed worker with capacity-aware fallback.")
     parser.add_argument("prompt", nargs="?", help="Prompt to send. If omitted, stdin is used.")
     parser.add_argument(
         "--models",
@@ -919,27 +920,6 @@ def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
 
 
 def main() -> int:
-    try:
-        current_depth = int(os.environ.get("AGENT_DELEGATION_DEPTH", "0") or "0")
-    except ValueError:
-        current_depth = 0
-    if current_depth >= 1:
-        print("Nested delegation rejected: a delegate cannot create another delegate.", file=sys.stderr)
-        return 2
-
-    previous_depth = os.environ.get("AGENT_DELEGATION_DEPTH")
-    os.environ["AGENT_DELEGATION_DEPTH"] = "1"
-    try:
-        return _main()
-    finally:
-        if previous_depth is None:
-            os.environ.pop("AGENT_DELEGATION_DEPTH", None)
-        else:
-            os.environ["AGENT_DELEGATION_DEPTH"] = previous_depth
-
-
-def _main() -> int:
-
     args = parse_args()
 
     backend = resolve_backend(args)
