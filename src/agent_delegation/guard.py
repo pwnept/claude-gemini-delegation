@@ -11,6 +11,7 @@ from .policy import DEFAULT_POLICY
 
 FORBIDDEN_SYNTAX = (
     ";",
+    "&",
     "&&",
     "||",
     "|",
@@ -23,6 +24,9 @@ FORBIDDEN_SYNTAX = (
     "{",
     "}",
     "$",
+    "^",
+    "%",
+    "!",
     "\n",
     "\r",
 )
@@ -57,10 +61,18 @@ def _command_from_payload(payload: dict) -> str:
 
 
 def _tokens(command: str) -> list[str]:
-    if any(item in command for item in FORBIDDEN_SYNTAX):
+    normalized = command
+    if len(normalized) >= 2 and normalized.startswith('"') and normalized.endswith('"'):
+        try:
+            decoded = json.loads(normalized)
+        except ValueError:
+            decoded = None
+        if isinstance(decoded, str):
+            normalized = decoded
+    if any(item in normalized for item in FORBIDDEN_SYNTAX):
         return []
     try:
-        return [token.strip('"') for token in shlex.split(command, posix=False)]
+        return [token.strip('"') for token in shlex.split(normalized, posix=False)]
     except ValueError:
         return []
 

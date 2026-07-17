@@ -100,6 +100,43 @@ class TestCommandGuard(unittest.TestCase):
         self.assertEqual(result["decision"], "allow")
         self.assertEqual(result["permissionOverrides"], ["command(rg needle .)"])
 
+    def test_guard_unwraps_agy_serialized_command(self):
+        payload = json.dumps(
+            {"toolCall": {"name": "run_command", "args": {"CommandLine": '"rg DEPTH_ENV src"'}}}
+        )
+        env = {cli.DEPTH_ENV: "1", cli.ALLOW_ENV: json.dumps([["rg"]])}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("sys.stdin", StringIO(payload)):
+                with mock.patch("sys.stdout", new_callable=StringIO) as stdout:
+                    self.assertEqual(guard.main(), 0)
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(result["decision"], "allow")
+        self.assertEqual(result["permissionOverrides"], ['command("rg DEPTH_ENV src")'])
+
+    def test_wrapped_commands_still_enforce_denials(self):
+        prefixes = [["rg"]]
+        self.assertFalse(guard.is_allowed('"Get-Date"', prefixes)[0])
+        self.assertFalse(guard.is_allowed('"rg needle .; Get-Date"', prefixes)[0])
+        self.assertFalse(guard.is_allowed('"rg needle . > result.txt"', prefixes)[0])
+        self.assertFalse(guard.is_allowed('"rg needle .', prefixes)[0])
+
+    def test_windows_command_metacharacters_are_denied(self):
+        prefixes = [["rg"]]
+        commands = (
+            "rg needle . & Get-Date",
+            "rg needle . ^& Get-Date",
+            "rg %PATTERN% src",
+            "rg !PATTERN! src",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertFalse(guard.is_allowed(command, prefixes)[0])
+                self.assertFalse(guard.is_allowed(json.dumps(command), prefixes)[0])
+
+    def test_wrapped_command_preserves_inner_quoted_argument(self):
+        command = json.dumps('rg "two words" src')
+        self.assertTrue(guard.is_allowed(command, [["rg"]])[0])
+
 
 class TestGlobalCli(unittest.TestCase):
     def test_nested_delegation_is_rejected(self):
