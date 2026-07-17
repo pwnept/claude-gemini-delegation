@@ -2,7 +2,7 @@
 
 # start-audit.ps1
 # Starts the Dave code review agent (non-interactive via agy).
-# Run from the project root or any subdirectory — the script resolves its own location.
+# Run from the project root or any subdirectory - the script resolves its own location.
 
 $AgentDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path (Join-Path $AgentDir ".." "..")

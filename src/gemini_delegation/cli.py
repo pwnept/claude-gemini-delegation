@@ -4,7 +4,6 @@ import argparse
 import sys
 import traceback
 
-
 def install(args) -> int:
     from .installer import install_hooks
 
@@ -52,19 +51,17 @@ def info(args) -> int:  # noqa: ARG001
     print("Set in Codex:       DELEGATION_CALLER=codex  (in Codex env config)")
     print("Set in agy:         DELEGATION_CALLER=agy    (in agy env config)")
     return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gemini-delegate",
-        description="Install local agy delegation hooks for Claude Code and Codex.",
+        description="Compatibility interface for legacy per-repository delegation installations.",
     )
     parser.add_argument("--version", action="version", version=_get_version())
     subparsers = parser.add_subparsers(dest="command")
     help_parser = subparsers.add_parser("help", help="Show this help text")
     help_parser.set_defaults(handler=lambda args: parser.print_help() or 0)
 
-    info_parser = subparsers.add_parser("info", help="Print version and managed-file contract (no --target needed)")
+    info_parser = subparsers.add_parser("info", help="Print version and managed-file contract")
     info_parser.set_defaults(handler=info)
 
     install_parser = subparsers.add_parser("install", help="First-time install into a target repo (fails if already installed)")
@@ -104,27 +101,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _get_version() -> str:
-    try:
-        from . import __version__
-        version_str = f"claude-gemini-delegation {__version__}"
-    except Exception:
-        version_str = "claude-gemini-delegation (unknown version)"
-    try:
-        import subprocess
-        from pathlib import Path
-        pkg_root = Path(__file__).resolve().parents[2]
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, check=False, timeout=5, cwd=pkg_root,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            version_str += f" ({result.stdout.strip()})"
-    except Exception:
-        pass
-    return version_str
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -133,16 +109,43 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         return args.handler(args)
-    except Exception as exc:  # noqa: BLE001 - CLI should convert all failures to actionable output.
+    except Exception as exc:  # noqa: BLE001
         from .installer import InstallError
 
         if isinstance(exc, InstallError):
             print("[ERROR] " + str(exc), file=sys.stderr)
         else:
-            print("[ERROR] Unexpected delegation installer failure.", file=sys.stderr)
-            print("Paste the output below into an AI agent and ask it to fix the install.", file=sys.stderr)
-            print(traceback.format_exc(), file=sys.stderr)
-        return 2
+            print("[ERROR] Unexpected legacy installer failure.", file=sys.stderr)
+            print("Paste the output below into an agent and ask it to fix the install.", file=sys.stderr)
+        print(traceback.format_exc(), file=sys.stderr)
+    return 2
+
+
+def _get_version() -> str:
+    try:
+        from . import __version__
+
+        version_str = f"claude-gemini-delegation {__version__}"
+    except Exception:
+        version_str = "claude-gemini-delegation (unknown version)"
+    try:
+        import subprocess
+        from pathlib import Path
+
+        pkg_root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            cwd=pkg_root,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            version_str += f" ({result.stdout.strip()})"
+    except Exception:
+        pass
+    return version_str
 
 
 if __name__ == "__main__":

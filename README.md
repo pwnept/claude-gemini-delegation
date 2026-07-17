@@ -1,107 +1,82 @@
-# Claude Gemini Delegation
+# Agent Delegation
 
-Local-first delegation hooks for Claude Code and Codex. Routes broad, high-output,
-or research-heavy work to a Gemini backend so the main session stays lean.
+`agent-delegation` is a machine-global delegation tool for Claude, Codex/ChatGPT,
+and Gemini/agy. It sends bounded search, research, and large-output work to an
+isolated worker so the caller keeps a smaller context.
 
-Three backends are supported — `agy` (Antigravity CLI) is the default. Three
+Three backends are supported: `agy` (Antigravity CLI) is the default. Three
 model profiles are available: `default` (Flash cascade), `research` (Pro, agy
-only), and `scout` (Flash on agy; Gemma 4 on alt backends — ideal for read-heavy file work).
+only), and `scout` (Flash on agy; Gemma 4 on alternate backends, ideal for
+read-heavy file work).
 
-## Intended Workflow
+## Safety model
 
-Clone this repository, inspect help, then install into a target project:
+- One delegation level. Every worker receives `AGENT_DELEGATION_DEPTH=1`, and
+  another delegation attempt is rejected.
+- agy runs with `--sandbox --mode plan`.
+- Gemini CLI runs with `--sandbox --approval-mode plan`.
+- Permission bypass options are never used.
+- Terminal commands are denied unless their token prefix is present in the
+  managed global policy or explicitly added by the caller for one run.
+- Native agy transcripts and continuation state are never changed or removed.
 
-```powershell
-git clone https://github.com/carlosduplar/claude-gemini-delegation.git
-cd claude-gemini-delegation
-.\install-delegation.ps1 help
-.\install-delegation.ps1 install --target "C:\path\to\target-repo"
-```
+## Install
 
-Re-running `install` on an already-installed repo is safe — it refreshes hook files and
-updates the AGENTS.md delegation block without touching user-authored content. Pass
-`--no-update` to error instead if you want to guard against accidental re-installs.
-
-Verify an existing target install:
-
-```powershell
-.\install-delegation.ps1 verify --target "C:\path\to\target-repo"
-```
-
-Uninstall managed delegation files:
+From a source checkout:
 
 ```powershell
-.\install-delegation.ps1 uninstall --target "C:\path\to\target-repo"
+uv tool install --reinstall .
+agent-delegation install --force
+agent-delegation status
 ```
 
-The default install is local to the target repo. That is intentional: if the
-target repo is cloned on a new computer, the project still contains its
-delegation instructions and hook files. External executables such as Python and
-`agy` still need to exist on that computer.
+The managed home is `~/.agent-delegation/`. User extensions belong in
+`~/.agent-delegation/policy.local.json`; setup refreshes `policy.json` without
+overwriting the local file.
 
-## Requirements
+## Use
 
-- PowerShell 7+ preferred for the installer and wrappers.
-- Python 3.8+.
-- **`agy` backend (default):** Antigravity CLI `agy` installed and signed in.
-  Windows: `pywinpty` is recommended for reliable output capture:
-  ```powershell
-  py -3 -m pip install --user pywinpty
-  ```
-- **`gemini-cli` backend:** Node.js 18+ and `npm install -g @google/gemini-cli`.
-  Authenticate once interactively with `gemini auth login` (OAuth, persists
-  across sessions). A `GEMINI_API_KEY` in `$PROFILE` also works for non-browser
-  environments.
-- **`gemini-api` backend:** A free API key from
-  https://aistudio.google.com/apikey added to `$PROFILE`:
-  ```powershell
-  $env:GEMINI_API_KEY = "your-key"
-  ```
-  No extra installs — uses Python stdlib `urllib` only.
+```powershell
+agent-delegation run "map the test suite" --profile scout --workspace .
+agent-delegation run "run the approved test subset" --allow-command "python -m pytest" --workspace .
+```
 
-The installer itself uses only Python standard library modules.
+The second example grants one exact command prefix for that run. Shells,
+redirection, pipelines, compound commands, delegation commands, and destructive
+file commands remain permanently denied.
 
-## Principal Features
+Disable or enable delegation in one Git repository without adding tracked files:
 
-- Local target install with no hidden project registry.
-- `AGENTS.md` managed delegation section with stable bracketed markers.
-- Root `CLAUDE.md` migration to `@AGENTS.md`.
-- `.claude/CLAUDE.md` migration into `AGENTS.md` when present.
-- Claude Code PreToolUse guard for high-output commands.
-- Antigravity workspace rule to prevent recursive `agy` delegation.
-- Offline install verification that does not call remote models.
-- Uninstall report written to `temp/delegation-uninstall-latest.md`.
+```powershell
+agent-delegation disable .
+agent-delegation enable .
+```
 
-## Installed Target Scope
+The setting is stored in the repository's local Git config.
 
-The installer creates or updates these paths in the target project:
+## Logs
+
+Each run creates:
 
 ```text
-AGENTS.md
-CLAUDE.md
-.gemini-delegation/
-  delegation_config.json
-  manifest.json             <- tracks owned files outside this dir
-  hooks/                    <- all hook implementations live here
-  agents/                   <- bundled agent workflows (dave, archive, memory)
-.claude/
-  agents/
-    dave.md                 <- Dave sub-agent, discoverable by Claude Code
-  commands/delegate.md      <- /delegate slash-command
-  settings.json             <- PreToolUse guard wired here
-.agents/
-  rules/delegation.md       <- Antigravity workspace rule
+~/.agent-delegation/runs/<caller>/<project>/<run-id>/
+  exchange.jsonl
+  manifest.json
+  native/<agy-conversation-id>/transcript_full.jsonl
 ```
 
-## Managed Markers
+Native JSONL is copied byte for byte and hash-verified after the child exits.
+The original remains in agy's native store. The manifest records caller,
+workspace, backend, capability additions, exit code, and hashes.
 
-Only content between these exact `AGENTS.md` markers is managed by the installer:
+## Legacy local installations
 
-```text
-> [claude-gemini-delegation:agents-begin]
-...
-> [claude-gemini-delegation:agents-end]
-```
+The old `gemini-delegate` command and per-repository installer remain only as
+temporary compatibility interfaces. New setup does not create `.gemini-delegation`
+or repository hook copies. Remove old local installs separately after verifying
+the global tool.
+
+## Legacy per-repository compatibility
 
 User-authored content outside the markers is preserved. If only one marker is
 present, the installer stops and tells you to fix the mismatched marker block.
@@ -301,21 +276,11 @@ From this repository, use the source hooks directly for broad repo analysis:
 & hooks/delegate_and_log.ps1 "map all test files under src/" "Scout" 10 -Profile scout
 ```
 
+## Development
+
 Run checks before handing off changes:
 
 ```powershell
 python -m unittest discover -s tests -v
-$files = @(Get-ChildItem src/gemini_delegation -Filter *.py) + @(Get-ChildItem hooks -Filter *.py)
-python -m py_compile @($files.FullName)
-```
-
-## Repository Layout
-
-```text
-install-delegation.ps1       PowerShell entry point
-src/gemini_delegation/       Python installer and CLI package
-hooks/                       Source hook templates copied into targets
-agents/                      Optional bundled agent workflows
-tests/                       Unit tests
-docs/legacy-uninstall-notes.md
+python -m py_compile src\agent_delegation\*.py src\gemini_delegation\*.py
 ```

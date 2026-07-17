@@ -241,7 +241,7 @@ def json_text(value: dict) -> str:
 
 
 class TestDetectCaller(unittest.TestCase):
-    """Tests for delegation_caller.detect_caller() — the layered harness detection."""
+    """Tests for delegation_caller.detect_caller() - the layered harness detection."""
 
     def _detect(self, env: dict) -> str:
         with mock.patch.dict(os.environ, env, clear=True):

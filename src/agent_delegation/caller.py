@@ -19,9 +19,9 @@ from pathlib import Path
 
 # ── routing table ──────────────────────────────────────────────────────────────
 CALLER_LOG_DIRS: dict[str, Path] = {
-    "claude": Path.home() / ".claude" / "delegation-logs",
-    "codex":  Path.home() / ".codex"  / "delegation-logs",
-    "agy":    Path.home() / ".gemini" / "delegation-logs",
+    "claude": Path.home() / ".agent-delegation" / "state" / "claude",
+    "codex": Path.home() / ".agent-delegation" / "state" / "codex",
+    "agy": Path.home() / ".agent-delegation" / "state" / "agy",
 }
 
 _VALID_CALLERS = frozenset(CALLER_LOG_DIRS)
@@ -42,7 +42,11 @@ def detect_caller() -> str:
     Layer 3 - '' (unknown; caller falls back to in-repo metrics dir).
     """
     # Layer 1: token we control
-    token = os.environ.get("DELEGATION_CALLER", "").strip().lower()
+    token = (
+        os.environ.get("AGENT_DELEGATION_CALLER")
+        or os.environ.get("DELEGATION_CALLER")
+        or ""
+    ).strip().lower()
     if token in _VALID_CALLERS:
         return token
 
