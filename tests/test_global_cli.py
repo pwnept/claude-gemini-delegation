@@ -214,6 +214,28 @@ class TestCommandGuard(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertTrue(guard.is_allowed(command, [["rg"]], workspace)[0])
 
+    def test_guard_confines_file_valued_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            root = base / "repo"
+            outside = base / "outside.txt"
+            root.mkdir()
+            outside.write_text("needle", encoding="utf-8")
+            commands = (
+                f'rg -f "{outside}" .',
+                f'rg --file="{outside}" .',
+                f'rg --ignore-file="{outside}" needle .',
+                f'fd --ignore-file="{outside}" pattern .',
+                f'Select-String -Path:"{outside}" -Pattern needle',
+                f'Select-String -Path="{outside}" -Pattern needle',
+                f'Select-String -Path "{outside}" -Pattern needle',
+                f'Select-String -LiteralPath "{outside}" -Pattern needle',
+            )
+            for command in commands:
+                with self.subTest(command=command):
+                    prefix = [[command.split()[0]]]
+                    self.assertFalse(guard.is_allowed(command, prefix, str(root))[0])
+
     def test_guard_resolves_real_symlink_before_allowing_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)

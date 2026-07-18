@@ -91,13 +91,14 @@ def _path_argument(token: str) -> str:
 
 
 _RG_VALUE_OPTIONS = {
-    "-A", "-B", "-C", "-e", "-f", "-g", "-m", "-t", "-T",
+    "-A", "-B", "-C", "-e", "-g", "-m", "-t", "-T",
     "--after-context", "--before-context", "--context", "--encoding",
-    "--engine", "--file", "--glob", "--max-columns", "--max-count",
+    "--engine", "--glob", "--max-columns", "--max-count",
     "--max-depth", "--max-filesize", "--path-separator", "--pre-glob",
     "--regexp", "--replace", "--sort", "--sortr", "--threads",
     "--type", "--type-add", "--type-not",
 }
+_RG_FILE_OPTIONS = {"-f", "--file", "--ignore-file"}
 
 
 def _rg_path_operands(tokens: list[str]) -> list[str]:
@@ -117,12 +118,22 @@ def _rg_path_operands(tokens: list[str]) -> list[str]:
             paths.extend(remaining)
             break
         if token.startswith("-"):
+            if name in _RG_FILE_OPTIONS or (len(token) > 2 and token.startswith("-f")):
+                if name in {"-f", "--file"} or token.startswith("-f"):
+                    explicit_pattern = True
+                if "=" in token:
+                    paths.append(token.split("=", 1)[1])
+                elif len(token) > 2 and token.startswith("-f"):
+                    paths.append(token[2:])
+                elif index + 1 < len(tokens):
+                    paths.append(tokens[index + 1])
+                    index += 1
+                index += 1
+                continue
             attached_short_value = (
-                len(token) > 2 and token[:2] in {"-A", "-B", "-C", "-e", "-f", "-g", "-m", "-t", "-T"}
+                len(token) > 2 and token[:2] in {"-A", "-B", "-C", "-e", "-g", "-m", "-t", "-T"}
             )
-            if name in {"-e", "--regexp", "-f", "--file"} or (
-                len(token) > 2 and token[:2] in {"-e", "-f"}
-            ):
+            if name in {"-e", "--regexp"} or (len(token) > 2 and token.startswith("-e")):
                 explicit_pattern = True
             if name == "--files":
                 files_mode = True
@@ -140,6 +151,7 @@ def _rg_path_operands(tokens: list[str]) -> list[str]:
 
 
 _FD_PATH_OPTIONS = {"--base-directory", "--search-path"}
+_FD_FILE_OPTIONS = {"--ignore-file"}
 _FD_VALUE_OPTIONS = {
     "-d", "-e", "-E", "-j", "-t",
     "--and", "--batch-size", "--changed-before", "--changed-within",
@@ -164,7 +176,7 @@ def _fd_path_operands(tokens: list[str]) -> list[str]:
             paths.extend(remaining)
             break
         if token.startswith("-"):
-            if name in _FD_PATH_OPTIONS:
+            if name in _FD_PATH_OPTIONS | _FD_FILE_OPTIONS:
                 if "=" in token:
                     paths.append(token.split("=", 1)[1])
                 elif index + 1 < len(tokens):
@@ -182,6 +194,32 @@ def _fd_path_operands(tokens: list[str]) -> list[str]:
     return paths
 
 
+def _select_string_path_operands(tokens: list[str]) -> list[str]:
+    paths = []
+    positionals = []
+    explicit_pattern = False
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        lowered = token.lower()
+        name = lowered.split("=", 1)[0].split(":", 1)[0]
+        if name in {"-path", "-literalpath"}:
+            if ":" in token or "=" in token:
+                paths.append(_path_argument(token))
+            elif index + 1 < len(tokens):
+                paths.append(tokens[index + 1])
+                index += 1
+        elif name == "-pattern":
+            explicit_pattern = True
+            if ":" not in token and "=" not in token and index + 1 < len(tokens):
+                index += 1
+        elif not token.startswith("-"):
+            positionals.append(token)
+        index += 1
+    paths.extend(positionals if explicit_pattern else positionals[1:])
+    return paths
+
+
 def _path_operands(tokens: list[str]) -> list[str]:
     command = tokens[0].lower()
     if command == "rg":
@@ -189,8 +227,7 @@ def _path_operands(tokens: list[str]) -> list[str]:
     if command == "fd":
         return _fd_path_operands(tokens)
     if command == "select-string":
-        positionals = [token for token in tokens[1:] if not token.startswith("-")]
-        return positionals[1:] if positionals else []
+        return _select_string_path_operands(tokens)
     return tokens[1:]
 
 
