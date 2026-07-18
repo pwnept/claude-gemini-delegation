@@ -192,12 +192,17 @@ class TestCommandGuard(unittest.TestCase):
             "rg -Luu needle .",
             "Get-ChildItem -FollowSymlink .",
             "Get-ChildItem -FollowSymlink:$true .",
+            "Get-ChildItem -FollowS .",
             "Get-Content *\\secret.txt",
             "rg needle src/*",
             "rg -efoo src/*",
             "fd pattern -xRemove-Item src",
             "fd --base-directory .. pattern",
             "fd --search-path=.. pattern",
+            "rg -z needle archive.gz",
+            "rg -uz needle archive.gz",
+            "rg --search-zip needle archive.gz",
+            "rg --hostname-bin=evil.exe needle .",
         ):
             with self.subTest(command=command):
                 prefix = [[command.split()[0]]]
@@ -230,6 +235,9 @@ class TestCommandGuard(unittest.TestCase):
                 f'Select-String -Path="{outside}" -Pattern needle',
                 f'Select-String -Path "{outside}" -Pattern needle',
                 f'Select-String -LiteralPath "{outside}" -Pattern needle',
+                f'Select-String -Lit:"{outside}" -Pattern needle',
+                f'Select-String -LiteralP:"{outside}" -Pattern needle',
+                f'Select-String "{outside}" -Patte needle',
             )
             for command in commands:
                 with self.subTest(command=command):

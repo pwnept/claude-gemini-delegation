@@ -46,6 +46,8 @@ FORBIDDEN_ARGUMENTS = {
     "--follow",
     "-followsymlink",
     "--follow-symlink",
+    "--search-zip",
+    "--hostname-bin",
 }
 
 
@@ -203,13 +205,19 @@ def _select_string_path_operands(tokens: list[str]) -> list[str]:
         token = tokens[index]
         lowered = token.lower()
         name = lowered.split("=", 1)[0].split(":", 1)[0]
-        if name in {"-path", "-literalpath"}:
-            if ":" in token or "=" in token:
-                paths.append(_path_argument(token))
+        path_parameter = any(
+            parameter.startswith(name) for parameter in ("-path", "-literalpath")
+        )
+        pattern_parameter = "-pattern".startswith(name)
+        if path_parameter:
+            if ":" in token:
+                paths.append(token.split(":", 1)[1])
+            elif "=" in token:
+                paths.append(token.split("=", 1)[1])
             elif index + 1 < len(tokens):
                 paths.append(tokens[index + 1])
                 index += 1
-        elif name == "-pattern":
+        elif pattern_parameter:
             explicit_pattern = True
             if ":" not in token and "=" not in token and index + 1 < len(tokens):
                 index += 1
@@ -237,6 +245,8 @@ def _cluster_denial(command: str, token: str) -> str | None:
     cluster = token[1:]
     if command in {"rg", "fd"} and "L" in cluster:
         return "follow-symlink short option is denied"
+    if command == "rg" and any(flag in cluster for flag in ("z", "Z")):
+        return "rg external decompressor option is denied"
     if command == "fd" and any(flag in cluster for flag in ("x", "X")):
         return "fd execution short option is denied"
     return None
@@ -299,6 +309,8 @@ def is_allowed(
         if cluster_reason:
             return False, cluster_reason
         name = token.split("=", 1)[0].split(":", 1)[0]
+        if command == "get-childitem" and "-followsymlink".startswith(name):
+            return False, "PowerShell follow-symlink parameter is denied"
         if name in FORBIDDEN_ARGUMENTS:
             return False, f"argument {name} is denied"
     if workspace:
