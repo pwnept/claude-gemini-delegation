@@ -1,10 +1,12 @@
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import venv
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -30,6 +32,62 @@ from gemini_delegation.installer import (  # noqa: E402
 
 
 class TestTargetInstall(unittest.TestCase):
+    def test_built_wheel_installs_local_hooks_without_checkout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            repository = Path(__file__).resolve().parents[1]
+            for name in ("pyproject.toml", "README.md"):
+                shutil.copy2(repository / name, checkout / name)
+            shutil.copytree(repository / "src", checkout / "src")
+            shutil.copytree(repository / "hooks", checkout / "hooks")
+            wheels = root / "wheels"
+            wheels.mkdir()
+            build_python = [sys.executable]
+            setuptools_probe = subprocess.run(
+                [*build_python, "-c", "import setuptools"], capture_output=True
+            )
+            if setuptools_probe.returncode != 0 and os.name == "nt":
+                build_python = ["py", "-3.13"]
+            build = subprocess.run(
+                [
+                    *build_python, "-m", "pip", "wheel", ".", "--no-deps",
+                    "--no-build-isolation", "--wheel-dir", str(wheels),
+                ],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+            wheel = next(wheels.glob("agent_delegation-*.whl"))
+            environment = root / "venv"
+            venv.EnvBuilder(with_pip=True).create(environment)
+            scripts = environment / ("Scripts" if os.name == "nt" else "bin")
+            python = scripts / ("python.exe" if os.name == "nt" else "python")
+            subprocess.run(
+                [str(python), "-m", "pip", "install", "--no-deps", str(wheel)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            target = root / "target"
+            target.mkdir()
+            command = scripts / ("gemini-delegate.exe" if os.name == "nt" else "gemini-delegate")
+            result = subprocess.run(
+                [str(command), "install", "--target", str(target)],
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(
+                (target / ".gemini-delegation" / "hooks" / "gemini_delegate.py").is_file()
+            )
+            self.assertTrue(
+                (target / ".gemini-delegation" / "src" / "agent_delegation" / "policy.py").is_file()
+            )
+
     def test_install_migrates_claude_to_agents_and_creates_local_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)

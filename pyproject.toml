@@ -21,5 +21,9 @@ windows = ["pywinpty>=2.0.0"]
 agent-delegation = "agent_delegation.cli:main"
 gemini-delegate = "gemini_delegation.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["agent_delegation", "gemini_delegation", "agent_delegation_hook_assets"]
+package-dir = {agent_delegation = "src/agent_delegation", gemini_delegation = "src/gemini_delegation", agent_delegation_hook_assets = "hooks"}
+
+[tool.setuptools.package-data]
+agent_delegation_hook_assets = ["*.ps1"]

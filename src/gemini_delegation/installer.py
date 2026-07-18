@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 
 
@@ -109,6 +110,18 @@ def check_for_update(config_path: Path) -> None:
 
 def source_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _copy_template(package: str, checkout_path: Path, name: str, destination: Path) -> None:
+    source = checkout_path / name
+    if source.is_file():
+        shutil.copy2(source, destination)
+        return
+    resource = resources.files(package).joinpath(name)
+    if not resource.is_file():
+        raise InstallError(f"Required packaged template is missing: {package}/{name}")
+    with resources.as_file(resource) as packaged_source:
+        shutil.copy2(packaged_source, destination)
 
 
 def _timestamp() -> str:
@@ -294,26 +307,15 @@ def ensure_agents_md(project_dir: Path, migrated_text: str = "") -> Path:
 
 def copy_shared_hooks(project_dir: Path) -> Path:
     source_hooks = source_root() / "hooks"
-    if not source_hooks.is_dir():
-        raise InstallError(
-            f"Cannot find source hook templates at {source_hooks}.\n"
-            "Run install-delegation.ps1 from a complete source checkout."
-        )
     dest_hooks = project_dir / ".gemini-delegation" / "hooks"
     dest_hooks.mkdir(parents=True, exist_ok=True)
     for name in HOOK_FILES:
-        source = source_hooks / name
-        if not source.is_file():
-            raise InstallError(f"Required hook template is missing: {source}")
-        shutil.copy2(source, dest_hooks / name)
+        _copy_template("agent_delegation_hook_assets", source_hooks, name, dest_hooks / name)
     source_runtime = source_root() / "src" / "agent_delegation"
     dest_runtime = project_dir / ".gemini-delegation" / "src" / "agent_delegation"
     dest_runtime.mkdir(parents=True, exist_ok=True)
     for name in RUNTIME_FILES:
-        source = source_runtime / name
-        if not source.is_file():
-            raise InstallError(f"Required managed runtime file is missing: {source}")
-        shutil.copy2(source, dest_runtime / name)
+        _copy_template("agent_delegation", source_runtime, name, dest_runtime / name)
     config_path = project_dir / ".gemini-delegation" / "delegation_config.json"
     existing_config: dict = {}
     if config_path.exists():
