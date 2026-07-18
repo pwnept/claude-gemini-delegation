@@ -29,9 +29,29 @@ from gemini_delegation.installer import (  # noqa: E402
     uninstall_hooks,
     verify_install,
 )
+from agent_delegation import installer as global_installer  # noqa: E402
+from gemini_delegation import installer as legacy_installer  # noqa: E402
 
 
 class TestTargetInstall(unittest.TestCase):
+    def test_legacy_resource_api_fallback_copies_packaged_templates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for module in (legacy_installer, global_installer):
+                with self.subTest(module=module.__name__):
+                    destination = root / (module.__name__.replace(".", "-") + ".py")
+                    with patch.object(module.resources, "files", None):
+                        module._copy_template(
+                            "agent_delegation",
+                            root / "missing-checkout",
+                            "policy.py",
+                            destination,
+                        )
+                    self.assertIn(
+                        "def secure_gemini_environment",
+                        destination.read_text(encoding="utf-8"),
+                    )
+
     def test_built_wheel_installs_local_hooks_without_checkout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

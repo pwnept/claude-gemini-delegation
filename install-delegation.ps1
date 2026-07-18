@@ -49,13 +49,13 @@ function Get-PythonCommand {
             continue
         }
 
-        & $candidate.Exe @($candidate.Args + @("-c", "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)")) *> $null
+        & $candidate.Exe @($candidate.Args + @("-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)")) *> $null
         if ($LASTEXITCODE -eq 0) {
             return [pscustomobject]$candidate
         }
     }
 
-    throw "Python 3.8+ was not found. Install Python 3.8+ or put py/python3/python on PATH."
+    throw "Python 3.10+ was not found. Install Python 3.10+ or put py/python3/python on PATH."
 }
 
 function Invoke-DelegationCli {

@@ -30,7 +30,7 @@ Write-Host "[delegation] Starting Gemini delegation (profile: $Profile)..." -For
 
 $python = @(Resolve-Python3)
 if (-not $python) {
-    Write-Error "Python 3 was not found. Install Python 3.6+ or ensure py -3/python3 is on PATH."
+    Write-Error "Python 3.10+ was not found. Install Python 3.10+ or ensure py -3/python3 is on PATH."
     exit 127
 }
 

@@ -7,7 +7,7 @@ name = "agent-delegation"
 version = "0.3.0"
 description = "Global bounded delegation for Claude, Codex, ChatGPT, and Gemini"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Carlos Duplar"}

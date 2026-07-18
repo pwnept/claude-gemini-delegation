@@ -21,7 +21,7 @@ foreach ($Python in $PythonCommands) {
         continue
     }
 
-    & $Python.Command @($Python.Prefix + @("-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)")) *> $null
+    & $Python.Command @($Python.Prefix + @("-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)")) *> $null
     if ($LASTEXITCODE -ne 0) {
         continue
     }
@@ -30,5 +30,5 @@ foreach ($Python in $PythonCommands) {
     exit $LASTEXITCODE
 }
 
-Write-Error "Python 3 was not found. Install Python 3.6+ or ensure py -3/python3 is on PATH."
+Write-Error "Python 3.10+ was not found. Install Python 3.10+ or ensure py -3/python3 is on PATH."
 exit 127

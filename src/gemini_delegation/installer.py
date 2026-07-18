@@ -117,10 +117,17 @@ def _copy_template(package: str, checkout_path: Path, name: str, destination: Pa
     if source.is_file():
         shutil.copy2(source, destination)
         return
-    resource = resources.files(package).joinpath(name)
-    if not resource.is_file():
+    files_api = getattr(resources, "files", None)
+    if callable(files_api):
+        resource = files_api(package).joinpath(name)
+        if not resource.is_file():
+            raise InstallError(f"Required packaged template is missing: {package}/{name}")
+        with resources.as_file(resource) as packaged_source:
+            shutil.copy2(packaged_source, destination)
+        return
+    if not resources.is_resource(package, name):
         raise InstallError(f"Required packaged template is missing: {package}/{name}")
-    with resources.as_file(resource) as packaged_source:
+    with resources.path(package, name) as packaged_source:
         shutil.copy2(packaged_source, destination)
 
 

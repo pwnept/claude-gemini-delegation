@@ -15,7 +15,7 @@ function Test-Python3 {
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
         return $false
     }
-    & $Command @($Prefix + @("-c", "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)")) *> $null
+    & $Command @($Prefix + @("-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)")) *> $null
     return ($LASTEXITCODE -eq 0)
 }
 
