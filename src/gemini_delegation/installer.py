@@ -25,6 +25,8 @@ MANAGED_FILES = (
     ".gemini-delegation/hooks/delegate_and_log.ps1",
     ".gemini-delegation/hooks/delegate_manager.py",
     ".gemini-delegation/hooks/delegate_manager.ps1",
+    ".gemini-delegation/src/agent_delegation/__init__.py",
+    ".gemini-delegation/src/agent_delegation/policy.py",
     ".gemini-delegation/delegation_config.json",
     ".agents/rules/delegation.md",
     ".claude/commands/delegate.md",
@@ -42,6 +44,7 @@ HOOK_FILES = (
     "delegate_manager.py",
     "delegate_manager.ps1",
 )
+RUNTIME_FILES = ("__init__.py", "policy.py")
 
 
 class InstallError(RuntimeError):
@@ -303,6 +306,14 @@ def copy_shared_hooks(project_dir: Path) -> Path:
         if not source.is_file():
             raise InstallError(f"Required hook template is missing: {source}")
         shutil.copy2(source, dest_hooks / name)
+    source_runtime = source_root() / "src" / "agent_delegation"
+    dest_runtime = project_dir / ".gemini-delegation" / "src" / "agent_delegation"
+    dest_runtime.mkdir(parents=True, exist_ok=True)
+    for name in RUNTIME_FILES:
+        source = source_runtime / name
+        if not source.is_file():
+            raise InstallError(f"Required managed runtime file is missing: {source}")
+        shutil.copy2(source, dest_runtime / name)
     config_path = project_dir / ".gemini-delegation" / "delegation_config.json"
     existing_config: dict = {}
     if config_path.exists():
@@ -781,6 +792,28 @@ def verify_install(target_dir: str, *, preserve_claude_md: bool = False) -> int:
             f"Exit code: {probe.returncode}\n"
             f"stdout:\n{probe.stdout}\n"
             f"stderr:\n{probe.stderr}"
+        )
+    runtime_root = project_dir / ".gemini-delegation" / "src"
+    runtime_probe = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sys;sys.path.insert(0,sys.argv[1]);import agent_delegation.policy",
+            str(runtime_root),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=30,
+    )
+    if runtime_probe.returncode != 0:
+        raise InstallError(
+            "Bundled managed runtime import smoke test failed.\n"
+            f"Exit code: {runtime_probe.returncode}\n"
+            f"stderr:\n{runtime_probe.stderr}"
         )
     print(f"[OK] Verified delegation install in {project_dir}")
     check_for_update(project_dir / ".gemini-delegation" / "delegation_config.json")

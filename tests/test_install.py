@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -43,12 +45,52 @@ class TestTargetInstall(unittest.TestCase):
             self.assertIn(AGENTS_MARKER_END, agents_text)
             self.assertTrue((project_dir / ".gemini-delegation" / "hooks" / "gemini_delegate.py").is_file())
             self.assertTrue((project_dir / ".gemini-delegation" / "hooks" / "delegate_and_log.ps1").is_file())
+            self.assertTrue(
+                (project_dir / ".gemini-delegation" / "src" / "agent_delegation" / "policy.py").is_file()
+            )
             self.assertTrue((project_dir / ".claude" / "commands" / "delegate.md").is_file())
             self.assertTrue((project_dir / ".agents" / "rules" / "delegation.md").is_file())
             # shims must NOT be created in the no-shim layout
             self.assertFalse((project_dir / ".claude" / "hooks" / "delegate_and_log.ps1").exists())
             self.assertFalse((project_dir / ".codex" / "hooks" / "delegate_and_log.ps1").exists())
             self.assertTrue((project_dir / ".gemini-delegation" / "agents" / "code-review-agent-dave" / "dave_audit.md").is_file())
+
+    def test_installed_hooks_load_bundled_security_runtime_in_isolated_python(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            install_hooks(target_dir=tmpdir)
+            code = (
+                "import importlib.util,json,os,pathlib,sys;"
+                "p=sys.argv[1];sys.path.insert(0,str(pathlib.Path(p).parent));"
+                "s=importlib.util.spec_from_file_location('installed_hook',p);"
+                "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+                "v=(m._secure_cli_environment() if hasattr(m,'_secure_cli_environment') "
+                "else m._delegated_environment(sys.argv[2]));"
+                "v=({'GEMINI_CLI_SYSTEM_SETTINGS_PATH':os.environ.get('GEMINI_CLI_SYSTEM_SETTINGS_PATH'),"
+                "'RIPGREP_CONFIG_PATH':os.environ.get('RIPGREP_CONFIG_PATH')} if isinstance(v,bool) else v);"
+                "print(json.dumps(v))"
+            )
+            environment = {
+                **os.environ,
+                "AGENT_DELEGATION_HOME": str(project_dir / "runtime-home"),
+                "AGENT_DELEGATION_AGY_VALIDATED": "1",
+            }
+            for name in ("gemini_delegate.py", "delegate_manager.py"):
+                with self.subTest(name=name):
+                    hook = project_dir / ".gemini-delegation" / "hooks" / name
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-c", code, str(hook), str(project_dir)],
+                        cwd=project_dir,
+                        env=environment,
+                        text=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    values = json.loads(result.stdout)
+                    self.assertTrue(Path(values["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).is_file())
+                    self.assertEqual(Path(values["RIPGREP_CONFIG_PATH"]).read_text(), "")
+                    if name == "delegate_manager.py":
+                        self.assertEqual(values["AGENT_DELEGATION_DEPTH"], "1")
 
     def test_install_skips_claude_migration_when_agents_already_has_same_text(self):
         with tempfile.TemporaryDirectory() as tmpdir:
