@@ -126,6 +126,16 @@ def _recover_internal_failure(command: str, delegate_id: str, exc: BaseException
         _write_marker(ddir, "done", status_line)
 
 
+def _persist_child_pid_or_kill(record: dict, pid_key: str, pid: int) -> None:
+    """Persist a spawned child before continuing, killing it if persistence fails."""
+    record[pid_key] = pid
+    try:
+        save_record(record)
+    except BaseException:  # noqa: BLE001
+        _kill_tree(pid)
+        raise
+
+
 def delegate_dir(delegate_id: str) -> Path:
     return delegates_root() / delegate_id
 
@@ -394,8 +404,7 @@ def cmd_run_oneshot(args: argparse.Namespace) -> int:
         cwd=record.get("workspace") or None,
         env={**os.environ, "AGENT_DELEGATION_DEPTH": "0"},
     )
-    record["runner_pid"] = proc.pid
-    save_record(record)
+    _persist_child_pid_or_kill(record, "runner_pid", proc.pid)
     comm: dict = {}
 
     def _communicate():
@@ -665,11 +674,10 @@ def cmd_host(args: argparse.Namespace) -> int:
 
     record.update(
         pid=os.getpid(),
-        agy_pid=pty.pid,
         status="idle",
         last_activity=time.time(),
     )
-    save_record(record)
+    _persist_child_pid_or_kill(record, "agy_pid", pty.pid)
 
     created = record.get("created_at", time.time())
     idle_gc = int(record.get("idle_gc_seconds") or IDLE_GC_SECONDS)

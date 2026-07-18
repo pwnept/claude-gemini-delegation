@@ -169,6 +169,14 @@ class TestPersistentManagerSafety(unittest.TestCase):
             self.assertTrue((ddir / "done").is_file())
             self.assertIn("KeyboardInterrupt", result)
 
+    def test_pid_persistence_failure_kills_new_child(self):
+        record = {"id": "dlg-new-child"}
+        with mock.patch.object(manager, "save_record", side_effect=OSError("disk full")):
+            with mock.patch.object(manager, "_kill_tree") as kill_tree:
+                with self.assertRaises(OSError):
+                    manager._persist_child_pid_or_kill(record, "runner_pid", 2468)
+        kill_tree.assert_called_once_with(2468)
+
 
 if __name__ == "__main__":
     unittest.main()

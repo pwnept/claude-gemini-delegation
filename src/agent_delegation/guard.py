@@ -28,6 +28,7 @@ FORBIDDEN_SYNTAX = (
     "^",
     "%",
     "!",
+    ",",
     "\n",
     "\r",
 )
@@ -91,7 +92,7 @@ def _path_argument(token: str) -> str:
 def _outside_workspace(tokens: list[str], workspace: str) -> str | None:
     root = Path(workspace).resolve()
     for token in tokens[1:]:
-        candidate = _path_argument(token).strip().strip('"')
+        candidate = _path_argument(token).strip().strip("\"'")
         if not candidate or candidate.startswith("-"):
             continue
         lowered = candidate.lower()

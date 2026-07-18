@@ -580,7 +580,17 @@ def cmd_host(args: argparse.Namespace) -> int:
     command = gemini_delegate.resolve_agy_command()
     # Interactive session: spawn INSIDE the workspace so agy enters interactive
     # mode (the one-shot runner deliberately avoids this; here it is the point).
-    cmdline = subprocess.list2cmdline(["--add-dir", workspace, "--model", record.get("model") or ""])
+    cmdline = subprocess.list2cmdline(
+        [
+            "--add-dir",
+            workspace,
+            "--model",
+            record.get("model") or "",
+            "--mode",
+            "plan",
+            "--sandbox",
+        ]
+    )
     pty = winpty.PTY(220, 50)
     pty.spawn(command, cmdline=cmdline, cwd=workspace)
 
@@ -972,6 +982,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command in {"async", "run-oneshot", "spawn", "host"}:
+        if os.environ.get("AGENT_DELEGATION_AGY_VALIDATED") != "1":
+            print(
+                "agy delegation is disabled until its permission hook passes the reviewed live smoke.",
+                file=sys.stderr,
+            )
+            return 2
     return args.handler(args)
 
 

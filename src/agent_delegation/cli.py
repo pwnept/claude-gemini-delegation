@@ -128,6 +128,16 @@ def _agy_config_root() -> Path:
     return Path.home() / ".gemini" / "config"
 
 
+def _guard_argv() -> list[str]:
+    """Build an isolated guard command pinned to this trusted package tree."""
+    package_root = Path(__file__).resolve().parent.parent
+    bootstrap = (
+        f"import sys;sys.path.insert(0,{str(package_root)!r});"
+        "from agent_delegation.guard import main;raise SystemExit(main())"
+    )
+    return [str(Path(sys.executable).resolve()), "-I", "-c", bootstrap]
+
+
 def _install_agy_hook() -> Path:
     root = _agy_config_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -142,9 +152,7 @@ def _install_agy_hook() -> Path:
                 raise CliError(f"Cannot update agy hooks file {path}: top level must be an object")
         except ValueError as exc:
             raise CliError(f"Cannot update invalid agy hooks file {path}: {exc}") from exc
-    guard_command = subprocess.list2cmdline(
-        [str(Path(sys.executable).resolve()), "-m", "agent_delegation.cli", "guard"]
-    )
+    guard_command = subprocess.list2cmdline(_guard_argv())
     hooks["agent-delegation-command-policy"] = {
         "enabled": True,
         "PreToolUse": [

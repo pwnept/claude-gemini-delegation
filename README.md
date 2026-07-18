@@ -291,6 +291,7 @@ global policy path. The `gemini-cli` and `gemini-api` backends remain available
 for direct source-checkout use.
 
 ```powershell
+$env:DELEGATION_BACKEND = "gemini-cli"
 & hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5
 & hooks/delegate_and_log.ps1 "audit @src/ for SQL injection" "Security" 10 -Profile research
 & hooks/delegate_and_log.ps1 "map all test files under src/" "Scout" 10 -Profile scout

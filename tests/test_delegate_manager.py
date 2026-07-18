@@ -35,7 +35,11 @@ class DelegateManagerCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._env = mock.patch.dict(
             os.environ,
-            {"DELEGATION_LOG_ROOT": self._tmp.name, "DELEGATION_DISABLE_LOGS": "1"},
+            {
+                "DELEGATION_LOG_ROOT": self._tmp.name,
+                "DELEGATION_DISABLE_LOGS": "1",
+                "AGENT_DELEGATION_AGY_VALIDATED": "1",
+            },
         )
         self._env.start()
         self.addCleanup(self._env.stop)
@@ -51,6 +55,16 @@ class DelegateManagerCase(unittest.TestCase):
 
 
 class TestAsyncOneshot(DelegateManagerCase):
+    def test_unvalidated_legacy_manager_rejects_launch(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(delegate_manager, "_spawn_detached") as spawn:
+                self.assertEqual(delegate_manager.main(["async", "task"]), 2)
+        spawn.assert_not_called()
+
+    def test_legacy_persistent_host_uses_sandboxed_plan_mode(self):
+        source = Path(delegate_manager.__file__).read_text(encoding="utf-8")
+        self.assertIn('"--mode",\n            "plan",\n            "--sandbox"', source)
+
     def test_async_registers_delegate_and_returns_id_immediately(self):
         delegate_id = self._fire_async()
 

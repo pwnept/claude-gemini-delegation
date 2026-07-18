@@ -170,6 +170,51 @@ class TestCommandGuard(unittest.TestCase):
             self.assertIn("escapes delegated workspace", reason)
             self.assertFalse(guard.is_allowed("rg needle ..", [["rg"]], str(root))[0])
 
+    def test_guard_denies_powershell_quoted_and_list_path_escapes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            root.mkdir()
+            prefixes = [["Get-Content"]]
+            self.assertFalse(
+                guard.is_allowed("Get-Content '..\\secret.txt'", prefixes, str(root))[0]
+            )
+            self.assertFalse(
+                guard.is_allowed(
+                    "Get-Content .\\inside.txt,..\\secret.txt", prefixes, str(root)
+                )[0]
+            )
+
+    def test_isolated_python_does_not_search_hostile_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            hostile = workspace / "agent_delegation"
+            hostile.mkdir()
+            marker = workspace / "shadowed.txt"
+            (hostile / "__init__.py").write_text(
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('shadowed')\n",
+                encoding="utf-8",
+            )
+            payload = json.dumps(
+                {"toolCall": {"name": "run_command", "args": {"CommandLine": "rg needle ."}}}
+            )
+            env = {
+                **os.environ,
+                cli.DEPTH_ENV: "1",
+                cli.ALLOW_ENV: json.dumps([["rg"]]),
+                cli.WORKSPACE_ENV: str(workspace),
+            }
+            result = subprocess.run(
+                cli._guard_argv(),
+                cwd=workspace,
+                env=env,
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(json.loads(result.stdout)["decision"], "allow")
+            self.assertFalse(marker.exists())
+
 
 class TestGlobalCli(unittest.TestCase):
     @staticmethod
@@ -209,7 +254,8 @@ class TestGlobalCli(unittest.TestCase):
                 self.assertIn("existing-hook", hooks)
                 command = hooks["agent-delegation-command-policy"]["PreToolUse"][0]["hooks"][0]["command"]
                 self.assertIn(str(Path(sys.executable).resolve()), command)
-                self.assertIn("-m agent_delegation.cli guard", command)
+                self.assertIn("-I -c", command)
+                self.assertIn(repr(str(Path(cli.__file__).resolve().parent.parent)), command)
                 self.assertNotEqual(command, "agent-delegation guard")
                 backups = list(config_hooks.parent.glob("hooks.json.backup-*"))
                 self.assertEqual(len(backups), 1)
