@@ -184,6 +184,37 @@ class TestCommandGuard(unittest.TestCase):
                 )[0]
             )
 
+    def test_guard_denies_follow_flags_and_wildcards(self):
+        workspace = str(Path.cwd())
+        for command in (
+            "rg --follow needle .",
+            "rg -L needle .",
+            "Get-ChildItem -FollowSymlink .",
+            "Get-Content *\\secret.txt",
+        ):
+            with self.subTest(command=command):
+                prefix = [[command.split()[0]]]
+                self.assertFalse(guard.is_allowed(command, prefix, workspace)[0])
+
+    def test_guard_resolves_real_symlink_before_allowing_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            root = base / "repo"
+            outside = base / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (outside / "secret.txt").write_text("secret", encoding="utf-8")
+            link = root / "linked"
+            try:
+                link.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+            self.assertFalse(
+                guard.is_allowed(
+                    "Get-Content linked\\secret.txt", [["Get-Content"]], str(root)
+                )[0]
+            )
+
     def test_isolated_python_does_not_search_hostile_workspace(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)

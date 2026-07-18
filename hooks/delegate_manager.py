@@ -62,6 +62,25 @@ WARN_FRACTION = 0.75  # soft-threshold fraction of the hard cap
 HOST_STARTUP_GRACE = float(os.environ.get("DELEGATION_HOST_STARTUP_GRACE", "15"))
 
 _HOOKS_DIR = Path(__file__).resolve().parent
+_SOURCE_ROOT = _HOOKS_DIR.parent / "src"
+
+
+def _delegated_environment(workspace: str) -> dict[str, str]:
+    """Build the managed command-policy environment for a legacy child."""
+    if not _SOURCE_ROOT.is_dir():
+        raise RuntimeError("managed agent_delegation package is unavailable; legacy launch denied")
+    source_root = str(_SOURCE_ROOT.resolve())
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    from agent_delegation.policy import command_prefixes, load_policy
+
+    prefixes = command_prefixes(load_policy(), [])
+    return {
+        **os.environ,
+        "AGENT_DELEGATION_DEPTH": "1",
+        "AGENT_DELEGATION_ALLOWED_PREFIXES": json.dumps(prefixes),
+        "AGENT_DELEGATION_WORKSPACE": str(Path(workspace).resolve()),
+    }
 
 
 def delegates_root() -> Path:
@@ -179,7 +198,7 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{time.strftime('%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
 
-def _spawn_detached(argv: list[str], log_path: Path) -> int:
+def _spawn_detached(argv: list[str], log_path: Path, workspace: str) -> int:
     """Start a fully detached child; caller does not wait. Returns the pid."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(log_path, "ab")  # noqa: SIM115 - inherited by the child
@@ -188,6 +207,7 @@ def _spawn_detached(argv: list[str], log_path: Path) -> int:
         "stdout": log_handle,
         "stderr": subprocess.STDOUT,
         "cwd": str(Path.cwd()),
+        "env": _delegated_environment(workspace),
     }
     if os.name == "nt":
         DETACHED_PROCESS = 0x00000008
@@ -263,6 +283,7 @@ def cmd_async(args: argparse.Namespace) -> int:
     pid = _spawn_detached(
         [sys.executable, str(_HOOKS_DIR / "delegate_manager.py"), "run-oneshot", delegate_id],
         ddir / "host.log",
+        record["workspace"],
     )
     record["pid"] = pid
     record["status"] = "busy"
@@ -330,6 +351,7 @@ def cmd_run_oneshot(args: argparse.Namespace) -> int:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env={**os.environ, "AGENT_DELEGATION_DEPTH": "0"},
         cwd=record.get("workspace") or None,
     )
     comm: dict = {}
@@ -443,6 +465,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     pid = _spawn_detached(
         [sys.executable, str(_HOOKS_DIR / "delegate_manager.py"), "host", delegate_id],
         ddir / "host.log",
+        record["workspace"],
     )
     record["pid"] = pid
     save_record(record)
@@ -577,6 +600,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         return 2
 
     workspace = record.get("workspace") or str(Path.cwd())
+    os.environ.update(_delegated_environment(workspace))
     command = gemini_delegate.resolve_agy_command()
     # Interactive session: spawn INSIDE the workspace so agy enters interactive
     # mode (the one-shot runner deliberately avoids this; here it is the point).

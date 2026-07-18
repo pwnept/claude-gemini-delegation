@@ -29,6 +29,10 @@ FORBIDDEN_SYNTAX = (
     "%",
     "!",
     ",",
+    "*",
+    "?",
+    "[",
+    "]",
     "\n",
     "\r",
 )
@@ -45,6 +49,10 @@ FORBIDDEN_ARGUMENTS = {
     "--open-files-in-pager",
     "--paginate",
     "--show-signature",
+    "--follow",
+    "-l",
+    "-followsymlink",
+    "--follow-symlink",
 }
 
 

@@ -39,6 +39,7 @@ class DelegateManagerCase(unittest.TestCase):
                 "DELEGATION_LOG_ROOT": self._tmp.name,
                 "DELEGATION_DISABLE_LOGS": "1",
                 "AGENT_DELEGATION_AGY_VALIDATED": "1",
+                "AGENT_DELEGATION_HOME": self._tmp.name,
             },
         )
         self._env.start()
@@ -64,6 +65,18 @@ class TestAsyncOneshot(DelegateManagerCase):
     def test_legacy_persistent_host_uses_sandboxed_plan_mode(self):
         source = Path(delegate_manager.__file__).read_text(encoding="utf-8")
         self.assertIn('"--mode",\n            "plan",\n            "--sandbox"', source)
+
+    def test_legacy_child_activates_managed_command_policy(self):
+        workspace = str(Path(self._tmp.name) / "repo")
+        environment = delegate_manager._delegated_environment(workspace)
+        self.assertEqual(environment["AGENT_DELEGATION_DEPTH"], "1")
+        self.assertEqual(
+            Path(environment["AGENT_DELEGATION_WORKSPACE"]), Path(workspace).resolve()
+        )
+        prefixes = __import__("json").loads(
+            environment["AGENT_DELEGATION_ALLOWED_PREFIXES"]
+        )
+        self.assertIn(["rg"], prefixes)
 
     def test_async_registers_delegate_and_returns_id_immediately(self):
         delegate_id = self._fire_async()

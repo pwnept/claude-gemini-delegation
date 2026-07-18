@@ -72,6 +72,18 @@ def _require_validated_agy() -> None:
         )
 
 
+def _trusted_module_argv(module: str, *args: str) -> list[str]:
+    """Launch a package module without searching the delegated workspace."""
+    if module not in {"manager", "runner"}:
+        raise ValueError(f"Unsupported trusted child module: {module}")
+    package_root = Path(__file__).resolve().parent.parent
+    bootstrap = (
+        f"import sys;sys.path.insert(0,{str(package_root)!r});"
+        f"from agent_delegation.{module} import main;raise SystemExit(main())"
+    )
+    return [str(Path(sys.executable).resolve()), "-I", "-c", bootstrap, *args]
+
+
 def _native_snapshot() -> dict[str, list[int]]:
     from .cli import _native_transcripts
 
@@ -332,7 +344,7 @@ def cmd_async(args: argparse.Namespace) -> int:
     save_record(record)
 
     pid = _spawn_detached(
-        [sys.executable, "-m", "agent_delegation.manager", "run-oneshot", delegate_id],
+        _trusted_module_argv("manager", "run-oneshot", delegate_id),
         ddir / "host.log",
     )
     record["pid"] = pid
@@ -373,12 +385,12 @@ def cmd_run_oneshot(args: argparse.Namespace) -> int:
 
     threading.Thread(target=_warn_at_soft_threshold, daemon=True).start()
 
-    cmd = [
-        sys.executable, "-m", "agent_delegation.runner",
+    cmd = _trusted_module_argv(
+        "runner",
         "--pre-format", "--context", record.get("context") or "General task",
         "--post-validate",
         "--timeout-seconds", str(timeout),
-    ]
+    )
     if record.get("profile") and record["profile"] != "default":
         cmd += ["--profile", record["profile"]]
     if record.get("model"):
@@ -517,7 +529,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     save_record(record)
 
     pid = _spawn_detached(
-        [sys.executable, "-m", "agent_delegation.manager", "host", delegate_id],
+        _trusted_module_argv("manager", "host", delegate_id),
         ddir / "host.log",
     )
     record["pid"] = pid

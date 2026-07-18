@@ -120,6 +120,27 @@ class TestPersistentManagerSafety(unittest.TestCase):
         self.assertNotIn("dangerously-skip-permissions", source)
         self.assertNotIn('"--yolo"', source)
 
+    def test_trusted_children_ignore_hostile_workspace_package(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            hostile = workspace / "agent_delegation"
+            hostile.mkdir()
+            marker = workspace / "shadowed.txt"
+            (hostile / "__init__.py").write_text(
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('shadowed')\n",
+                encoding="utf-8",
+            )
+            for module in ("manager", "runner"):
+                with self.subTest(module=module):
+                    result = subprocess.run(
+                        manager._trusted_module_argv(module, "--help"),
+                        cwd=workspace,
+                        text=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(marker.exists())
+
     def test_archive_writes_hash_verified_manifest_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
