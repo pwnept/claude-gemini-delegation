@@ -24,6 +24,8 @@ import sys
 import time
 from pathlib import Path
 
+from .policy import secure_gemini_environment
+
 if hasattr(sys.stdin, "reconfigure"):
     # PowerShell prepends a UTF-8 BOM when piping a string to a native
     # process; utf-8-sig strips it so a leading U+FEFF doesn't pollute the prompt.
@@ -1202,6 +1204,9 @@ def _main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    if backend == "agy":
+        os.environ.update(secure_gemini_environment())
 
     if backend == "gemini-cli":
         print(

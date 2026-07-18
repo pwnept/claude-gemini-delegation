@@ -76,7 +76,7 @@ class TestAsyncOneshot(DelegateManagerCase):
         prefixes = __import__("json").loads(
             environment["AGENT_DELEGATION_ALLOWED_PREFIXES"]
         )
-        self.assertIn(["rg"], prefixes)
+        self.assertIn(["rg", "--no-config"], prefixes)
 
     def test_async_registers_delegate_and_returns_id_immediately(self):
         delegate_id = self._fire_async()

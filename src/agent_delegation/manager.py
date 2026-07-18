@@ -46,7 +46,7 @@ import uuid
 from pathlib import Path
 
 from . import runner as gemini_delegate
-from .policy import global_home
+from .policy import global_home, secure_gemini_environment
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -70,6 +70,7 @@ def _require_validated_agy() -> None:
         raise RuntimeError(
             "agy delegation is disabled until its permission hook passes the reviewed live smoke"
         )
+    os.environ.update(secure_gemini_environment())
 
 
 def _trusted_module_argv(module: str, *args: str) -> list[str]:

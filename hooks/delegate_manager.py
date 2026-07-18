@@ -72,11 +72,12 @@ def _delegated_environment(workspace: str) -> dict[str, str]:
     source_root = str(_SOURCE_ROOT.resolve())
     if source_root not in sys.path:
         sys.path.insert(0, source_root)
-    from agent_delegation.policy import command_prefixes, load_policy
+    from agent_delegation.policy import command_prefixes, load_policy, secure_gemini_environment
 
     prefixes = command_prefixes(load_policy(), [])
     return {
         **os.environ,
+        **secure_gemini_environment(),
         "AGENT_DELEGATION_DEPTH": "1",
         "AGENT_DELEGATION_ALLOWED_PREFIXES": json.dumps(prefixes),
         "AGENT_DELEGATION_WORKSPACE": str(Path(workspace).resolve()),

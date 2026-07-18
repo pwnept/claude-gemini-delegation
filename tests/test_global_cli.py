@@ -18,7 +18,8 @@ from agent_delegation import cli, guard, policy, runner  # noqa: E402
 class TestGlobalPolicy(unittest.TestCase):
     def test_default_policy_is_read_only(self):
         rendered = {tuple(item) for item in policy.DEFAULT_POLICY["command_prefixes"]}
-        self.assertIn(("rg",), rendered)
+        self.assertNotIn(("rg",), rendered)
+        self.assertIn(("rg", "--no-config"), rendered)
         self.assertIn(("git", "--no-pager", "diff", "--no-ext-diff", "--no-textconv"), rendered)
         self.assertIn(
             ("git", "--no-pager", "log", "--no-ext-diff", "--no-textconv", "--no-show-signature"),
@@ -54,6 +55,65 @@ class TestGlobalPolicy(unittest.TestCase):
                 check=True,
             )
             self.assertFalse(sentinel.exists())
+
+    def test_ripgrep_no_config_ignores_executable_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            sentinel = root / "pre-ran.txt"
+            source = root / "input.txt"
+            source.write_text("needle\n", encoding="utf-8")
+            if os.name == "nt":
+                helper = root / "pre.cmd"
+                helper.write_text(
+                    f'@echo off\r\necho ran>"{sentinel}"\r\ntype "%1"\r\n',
+                    encoding="ascii",
+                )
+            else:
+                helper = root / "pre.sh"
+                helper.write_text(
+                    f'#!/bin/sh\nprintf ran > "{sentinel}"\ncat "$1"\n',
+                    encoding="ascii",
+                )
+                helper.chmod(0o700)
+            config = root / "ripgrep.conf"
+            config.write_text(f"--pre={helper.as_posix()}\n", encoding="utf-8")
+            env = {**os.environ, "RIPGREP_CONFIG_PATH": str(config)}
+            subprocess.run(["rg", "needle", str(source)], env=env, check=True, capture_output=True)
+            self.assertTrue(sentinel.is_file())
+            sentinel.unlink()
+            subprocess.run(
+                ["rg", "--no-config", "needle", str(source)],
+                env=env,
+                check=True,
+                capture_output=True,
+            )
+            self.assertFalse(sentinel.exists())
+
+    def test_secure_gemini_environment_ignores_workspace_env(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(
+                os.environ, {"AGENT_DELEGATION_HOME": tmpdir}, clear=False
+            ):
+                environment = policy.secure_gemini_environment()
+            settings = json.loads(
+                Path(environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(settings["advanced"]["ignoreLocalEnv"])
+            self.assertEqual(
+                Path(environment["RIPGREP_CONFIG_PATH"]).read_text(encoding="utf-8"), ""
+            )
+            Path(environment["RIPGREP_CONFIG_PATH"]).write_text(
+                "--pre=evil\n", encoding="utf-8"
+            )
+            with mock.patch.dict(
+                os.environ, {"AGENT_DELEGATION_HOME": tmpdir}, clear=False
+            ):
+                policy.secure_gemini_environment()
+            self.assertEqual(
+                Path(environment["RIPGREP_CONFIG_PATH"]).read_text(encoding="utf-8"), ""
+            )
 
     def test_run_scoped_extension_is_added(self):
         prefixes = policy.command_prefixes(policy.DEFAULT_POLICY, ["python -m pytest"])

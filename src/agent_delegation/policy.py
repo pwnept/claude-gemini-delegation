@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import uuid
 from pathlib import Path
 
 
@@ -11,7 +12,7 @@ DEFAULT_POLICY = {
     "description": "Managed read-only terminal capabilities for depth-1 delegates.",
     "agy_print_mode_enabled": False,
     "command_prefixes": [
-        ["rg"],
+        ["rg", "--no-config"],
         ["fd"],
         ["git", "-c", "core.fsmonitor=false", "status"],
         ["git", "--no-pager", "diff", "--no-ext-diff", "--no-textconv"],
@@ -99,6 +100,34 @@ def ensure_global_home(*, force: bool = False) -> Path:
             encoding="utf-8",
         )
     return home
+
+
+def secure_gemini_environment() -> dict[str, str]:
+    """Pin Gemini and ripgrep to managed configuration that ignores workspace env."""
+    home = ensure_global_home()
+    settings = home / "gemini-system-settings.json"
+    ripgrep = home / "empty-ripgrep-config"
+    content = json.dumps({"advanced": {"ignoreLocalEnv": True}}, indent=2) + "\n"
+    temporary = settings.with_name(f"{settings.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        os.replace(temporary, settings)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    ripgrep_temporary = ripgrep.with_name(
+        f"{ripgrep.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    )
+    try:
+        ripgrep_temporary.write_text("", encoding="utf-8")
+        os.replace(ripgrep_temporary, ripgrep)
+    finally:
+        if ripgrep_temporary.exists():
+            ripgrep_temporary.unlink()
+    return {
+        "GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(settings),
+        "RIPGREP_CONFIG_PATH": str(ripgrep),
+    }
 
 
 def _read_policy(path: Path) -> dict:
