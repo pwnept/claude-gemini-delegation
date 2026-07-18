@@ -40,6 +40,28 @@ class TestAgyValidationGate(unittest.TestCase):
                     with mock.patch.object(runner, "run_api_backend", return_value=0):
                         self.assertEqual(runner.main(), 0)
 
+    def test_package_gemini_cli_launch_installs_secure_environment(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            captured = {}
+
+            def fake_run(model, prompt, timeout):
+                captured["settings"] = os.environ.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+                captured["ripgrep"] = os.environ.get("RIPGREP_CONFIG_PATH")
+                return subprocess.CompletedProcess([], 0, stdout="ok\n", stderr="")
+
+            argv = [
+                "agent-delegation-runner", "--backend", "gemini-cli",
+                "--agent-dir", tmpdir, "--no-state", "--no-save", "map files",
+            ]
+            with mock.patch.dict(
+                os.environ, {"AGENT_DELEGATION_HOME": tmpdir}, clear=False
+            ):
+                with mock.patch.object(sys, "argv", argv):
+                    with mock.patch.object(runner, "run_gemini_cli", side_effect=fake_run):
+                        self.assertEqual(runner.main(), 0)
+            self.assertTrue(Path(captured["settings"]).is_file())
+            self.assertEqual(Path(captured["ripgrep"]).read_text(encoding="utf-8"), "")
+
 
 class TestGlobalManagerCli(unittest.TestCase):
     def test_manager_commands_are_public(self):

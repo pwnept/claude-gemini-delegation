@@ -361,6 +361,41 @@ class TestBackendSelection(unittest.TestCase):
         with mock.patch.dict(os.environ, {"DELEGATION_BACKEND": "gemini-cli"}, clear=True):
             self.assertEqual(gemini_delegate.resolve_backend(args), "gemini-cli")
 
+    def test_legacy_cli_launches_install_secure_environment(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for backend in ("agy", "gemini-cli"):
+                with self.subTest(backend=backend):
+                    captured = {}
+
+                    def fake_run(*args, **kwargs):
+                        captured["settings"] = os.environ.get(
+                            "GEMINI_CLI_SYSTEM_SETTINGS_PATH"
+                        )
+                        captured["ripgrep"] = os.environ.get("RIPGREP_CONFIG_PATH")
+                        return FakeResult(0, stdout="ok\n")
+
+                    argv = [
+                        "gemini_delegate.py", "--backend", backend,
+                        "--no-state", "--no-save", "hello",
+                    ]
+                    environment = {
+                        "AGENT_DELEGATION_HOME": tmpdir,
+                        "AGENT_DELEGATION_AGY_VALIDATED": "1",
+                    }
+                    with mock.patch.dict(os.environ, environment, clear=False):
+                        with mock.patch.object(sys, "argv", argv):
+                            with mock.patch.object(
+                                gemini_delegate, "resolve_agy_command", return_value="agy.exe"
+                            ):
+                                target = "run_agy" if backend == "agy" else "run_gemini_cli"
+                                with mock.patch.object(gemini_delegate, target, side_effect=fake_run):
+                                    with mock.patch.object(sys.stdout, "write"):
+                                        self.assertEqual(gemini_delegate.main(), 0)
+                    self.assertTrue(Path(captured["settings"]).is_file())
+                    self.assertEqual(
+                        Path(captured["ripgrep"]).read_text(encoding="utf-8"), ""
+                    )
+
 
 class TestGeminiCliBackend(unittest.TestCase):
     def test_windows_shim_resolves_to_node_entrypoint(self):

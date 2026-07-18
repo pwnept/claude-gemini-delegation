@@ -1205,7 +1205,7 @@ def _main() -> int:
         )
         return 2
 
-    if backend == "agy":
+    if backend in {"agy", "gemini-cli"}:
         os.environ.update(secure_gemini_environment())
 
     if backend == "gemini-cli":

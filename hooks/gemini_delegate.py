@@ -325,6 +325,20 @@ def resolve_backend(args: argparse.Namespace) -> str:
     return backend.strip().lower()
 
 
+def _secure_cli_environment() -> bool:
+    """Install managed environment isolation before launching a CLI backend."""
+    source_root = Path(__file__).resolve().parent.parent / "src"
+    if source_root.is_dir() and str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
+    try:
+        from agent_delegation.policy import secure_gemini_environment
+    except ImportError as exc:
+        print(f"managed delegation security package is unavailable: {exc}", file=sys.stderr)
+        return False
+    os.environ.update(secure_gemini_environment())
+    return True
+
+
 def _gemini_cli_argv_prefix() -> list[str]:
     """Resolve gemini-cli without passing untrusted text through cmd.exe."""
     command = shutil.which("gemini")
@@ -1190,6 +1204,9 @@ def _main() -> int:
             "agy delegation is disabled until its permission hook passes the reviewed live smoke.",
             file=sys.stderr,
         )
+        return 2
+
+    if backend in {"agy", "gemini-cli"} and not _secure_cli_environment():
         return 2
 
     if backend == "gemini-cli":
