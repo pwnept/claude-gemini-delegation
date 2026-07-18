@@ -295,6 +295,11 @@ def run_command(args: argparse.Namespace) -> int:
 
     caller = args.caller if args.caller != "auto" else (detect_caller() or "unknown")
     policy = load_policy()
+    if args.backend == "agy" and not policy.get("agy_print_mode_enabled", False):
+        raise CliError(
+            "agy print mode is disabled because its permission hook has not been live-validated. "
+            "Use gemini-cli or gemini-api until the reviewed allow-rg/deny-Get-Date smoke passes."
+        )
     prefixes = command_prefixes(policy, args.allow_command)
     run_dir = _run_directory(caller, workspace)
     prompt = _build_prompt(args.task, args.context, workspace, prefixes)
@@ -302,11 +307,11 @@ def run_command(args: argparse.Namespace) -> int:
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     environment = {
-        DEPTH_ENV: "1",
         CALLER_ENV: caller,
         ALLOW_ENV: json.dumps(prefixes),
         WORKSPACE_ENV: str(workspace),
         RUN_DIR_ENV: str(run_dir),
+        "AGENT_DELEGATION_AGY_VALIDATED": "1" if args.backend == "agy" else "0",
         "DELEGATION_LOG_ROOT": str(global_home()),
     }
     old_cwd = Path.cwd()
@@ -378,6 +383,71 @@ def run_command(args: argparse.Namespace) -> int:
     return code
 
 
+def manager_command(args: argparse.Namespace) -> int:
+    from . import manager
+
+    command = args.command
+    manager_args = [command]
+    environment: dict[str, str] = {}
+    old_cwd = Path.cwd()
+
+    if command in {"async", "spawn"}:
+        if _depth() >= 1:
+            raise CliError("Nested delegation rejected: a delegate cannot create another delegate.")
+        workspace = _workspace(args.workspace)
+        if not _git_enabled(workspace):
+            raise CliError(f"Delegation is disabled for {workspace}")
+        policy = load_policy()
+        if not policy.get("agy_print_mode_enabled", False):
+            raise CliError(
+                "agy delegation is disabled because its permission hook has not been live-validated."
+            )
+        prefixes = command_prefixes(policy, args.allow_command)
+        caller = args.caller if args.caller != "auto" else (detect_caller() or "unknown")
+        environment = {
+            CALLER_ENV: caller,
+            ALLOW_ENV: json.dumps(prefixes),
+            WORKSPACE_ENV: str(workspace),
+            "AGENT_DELEGATION_AGY_VALIDATED": "1",
+            "DELEGATION_LOG_ROOT": str(global_home()),
+        }
+        os.chdir(workspace)
+
+        if command == "async":
+            manager_args.append(args.task)
+            manager_args.extend(["--context", args.context])
+            manager_args.extend(["--profile", args.profile])
+            manager_args.extend(["--timeout-seconds", str(args.timeout)])
+            manager_args.extend(["--idle-timeout-seconds", str(args.idle_timeout)])
+            manager_args.extend(["--caller", caller if caller in {"claude", "codex", "agy"} else "auto"])
+            if args.max_lines:
+                manager_args.extend(["--max-lines", str(args.max_lines)])
+        else:
+            manager_args.extend(["--workspace", str(workspace)])
+            manager_args.extend(["--profile", args.profile])
+            manager_args.extend(["--idle-gc-seconds", str(args.idle_gc)])
+            manager_args.extend(["--max-age-seconds", str(args.max_age)])
+            manager_args.extend(["--timeout-seconds", str(args.timeout)])
+            if args.task:
+                manager_args.extend(["--task", args.task])
+        if args.model:
+            manager_args.extend(["--model", args.model])
+    elif command == "wait":
+        manager_args.extend([args.id, "--timeout-seconds", str(args.timeout)])
+    elif command == "steer":
+        manager_args.extend([args.id, args.prompt, "--timeout-seconds", str(args.timeout)])
+    elif command in {"read", "stop"}:
+        manager_args.append(args.id)
+    elif command == "list" and args.json:
+        manager_args.append("--json")
+
+    try:
+        with _temporary_environment(environment):
+            return manager.main(manager_args)
+    finally:
+        os.chdir(old_cwd)
+
+
 def install_command(args: argparse.Namespace) -> int:
     home = ensure_global_home(force=args.force)
     agy_hook = _install_agy_hook()
@@ -395,6 +465,7 @@ def toggle_command(args: argparse.Namespace, enabled: bool) -> int:
 
 def status_command(args: argparse.Namespace) -> int:
     workspace = _workspace(args.workspace)
+    policy = load_policy()
     payload = {
         "version": __version__,
         "home": str(global_home()),
@@ -404,6 +475,7 @@ def status_command(args: argparse.Namespace) -> int:
         "caller": detect_caller() or "unknown",
         "policy": str(global_home() / "policy.json"),
         "agy_hook": str(_agy_config_root() / "hooks.json"),
+        "agy_print_mode_enabled": bool(policy.get("agy_print_mode_enabled", False)),
     }
     print(json.dumps(payload, indent=2))
     return 0
@@ -430,12 +502,60 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--workspace", default=".")
     run.add_argument("--caller", choices=("auto", "claude", "codex", "agy"), default="auto")
     run.add_argument("--backend", choices=("agy", "gemini-cli", "gemini-api"), default="agy")
-    run.add_argument("--profile", choices=("default", "research", "scout"), default="default")
+    run.add_argument("--profile", choices=("default", "research", "scout", "skim"), default="default")
     run.add_argument("--model")
     run.add_argument("--allow-command", action="append", default=[], metavar="PREFIX")
     run.add_argument("--timeout", type=int, default=600)
     run.add_argument("--idle-timeout", type=int, default=60)
     run.set_defaults(handler=run_command)
+
+    async_command = sub.add_parser("async", help="Start one detached bounded delegation")
+    async_command.add_argument("task")
+    async_command.add_argument("--context", default="General task")
+    async_command.add_argument("--workspace", default=".")
+    async_command.add_argument("--caller", choices=("auto", "claude", "codex", "agy"), default="auto")
+    async_command.add_argument("--profile", choices=("default", "research", "scout", "skim"), default="default")
+    async_command.add_argument("--model")
+    async_command.add_argument("--allow-command", action="append", default=[], metavar="PREFIX")
+    async_command.add_argument("--max-lines", type=int, default=0)
+    async_command.add_argument("--timeout", type=int, default=600)
+    async_command.add_argument("--idle-timeout", type=int, default=0)
+    async_command.set_defaults(handler=manager_command)
+
+    spawn = sub.add_parser("spawn", help="Start a persistent steerable delegation")
+    spawn.add_argument("--task")
+    spawn.add_argument("--workspace", default=".")
+    spawn.add_argument("--caller", choices=("auto", "claude", "codex", "agy"), default="auto")
+    spawn.add_argument("--profile", choices=("default", "research", "scout", "skim"), default="default")
+    spawn.add_argument("--model")
+    spawn.add_argument("--allow-command", action="append", default=[], metavar="PREFIX")
+    spawn.add_argument("--idle-gc", type=int, default=180)
+    spawn.add_argument("--max-age", type=int, default=7200)
+    spawn.add_argument("--timeout", type=int, default=660)
+    spawn.set_defaults(handler=manager_command)
+
+    wait = sub.add_parser("wait", help="Wait for a detached delegation marker")
+    wait.add_argument("id")
+    wait.add_argument("--timeout", type=int, default=900)
+    wait.set_defaults(handler=manager_command)
+
+    steer = sub.add_parser("steer", help="Send a prompt to a persistent delegation")
+    steer.add_argument("id")
+    steer.add_argument("prompt")
+    steer.add_argument("--timeout", type=int, default=660)
+    steer.set_defaults(handler=manager_command)
+
+    read = sub.add_parser("read", help="Read the latest delegation response")
+    read.add_argument("id")
+    read.set_defaults(handler=manager_command)
+
+    list_command = sub.add_parser("list", help="List detached and persistent delegations")
+    list_command.add_argument("--json", action="store_true")
+    list_command.set_defaults(handler=manager_command)
+
+    stop = sub.add_parser("stop", help="Stop a detached or persistent delegation")
+    stop.add_argument("id")
+    stop.set_defaults(handler=manager_command)
 
     for name, enabled in (("enable", True), ("disable", False)):
         command = sub.add_parser(name, help=f"{name.title()} delegation in one Git repository")

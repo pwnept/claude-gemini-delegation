@@ -139,6 +139,14 @@ class TestCommandGuard(unittest.TestCase):
 
 
 class TestGlobalCli(unittest.TestCase):
+    @staticmethod
+    def _enable_agy_for_offline_test(home: Path) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "policy.local.json").write_text(
+            json.dumps({"schema": 1, "agy_print_mode_enabled": True}) + "\n",
+            encoding="utf-8",
+        )
+
     def test_nested_delegation_is_rejected(self):
         with mock.patch.dict(os.environ, {cli.DEPTH_ENV: "1"}, clear=True):
             code = cli.main(["run", "do work"])
@@ -197,6 +205,7 @@ class TestGlobalCli(unittest.TestCase):
             home = root / "home"
             workspace.mkdir()
             subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            self._enable_agy_for_offline_test(home)
             args = [
                 "run",
                 "map files",
@@ -232,6 +241,7 @@ class TestGlobalCli(unittest.TestCase):
             home = root / "home"
             workspace.mkdir()
             subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            self._enable_agy_for_offline_test(home)
             args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
             with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
                 with mock.patch.object(
@@ -273,6 +283,7 @@ class TestGlobalCli(unittest.TestCase):
             home = root / "home"
             workspace.mkdir()
             subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            self._enable_agy_for_offline_test(home)
             args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
             with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
                 with mock.patch.object(cli, "_invoke_runner", side_effect=RuntimeError("worker crashed")):
@@ -292,6 +303,7 @@ class TestGlobalCli(unittest.TestCase):
             home = root / "home"
             workspace.mkdir()
             subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            self._enable_agy_for_offline_test(home)
             args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
             with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
                 with mock.patch.object(cli, "_invoke_runner", return_value=(0, "result\n", "", "model-a")):
@@ -312,6 +324,7 @@ class TestGlobalCli(unittest.TestCase):
             home = root / "home"
             workspace.mkdir()
             subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+            self._enable_agy_for_offline_test(home)
             args = ["run", "map files", "--workspace", str(workspace), "--caller", "codex"]
             with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(home)}, clear=False):
                 with mock.patch.object(cli, "_invoke_runner", side_effect=KeyboardInterrupt()):

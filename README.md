@@ -34,16 +34,32 @@ The managed home is `~/.agent-delegation/`. User extensions belong in
 `~/.agent-delegation/policy.local.json`; setup refreshes `policy.json` without
 overwriting the local file.
 
+The agy print backend remains disabled until its permission hook passes a
+reviewed live smoke that allows `rg` and denies `Get-Date`. `gemini-cli` and
+`gemini-api` remain available while that validation is unresolved. Do not set
+`agy_print_mode_enabled` to true merely to bypass this gate.
+
 ## Use
 
 ```powershell
 agent-delegation run "map the test suite" --profile scout --workspace .
 agent-delegation run "run the approved test subset" --allow-command "python -m pytest" --workspace .
+agent-delegation async "map all test fixtures" --profile skim --workspace .
+agent-delegation wait <delegate-id>
+agent-delegation spawn --workspace . --profile scout
+agent-delegation steer <delegate-id> "Now inspect the failing fixtures"
+agent-delegation read <delegate-id>
+agent-delegation stop <delegate-id>
 ```
 
 The second example grants one exact command prefix for that run. Shells,
 redirection, pipelines, compound commands, delegation commands, and destructive
 file commands remain permanently denied.
+
+`async` starts a detached one-shot job. `spawn` starts a persistent, single-writer
+agy session with sandboxed plan mode, bounded lifetime, append-only PTY logging,
+and marker-delimited responses. Both retain native transcript copies and a
+manifest under `~/.agent-delegation/` when they finish.
 
 Disable or enable delegation in one Git repository without adding tracked files:
 
@@ -146,7 +162,7 @@ the examples above keep working unchanged.
 |---|---|---|
 | `agy` (default) | nothing, or `DELEGATION_BACKEND=agy` | Antigravity CLI installed and signed in |
 | `gemini-cli` | `DELEGATION_BACKEND=gemini-cli` | `npm install -g @google/gemini-cli` + `gemini auth login` |
-| `gemini-api` | `DELEGATION_BACKEND=gemini-api` | `GEMINI_API_KEY` in `$PROFILE` — no extra installs |
+| `gemini-api` | `DELEGATION_BACKEND=gemini-api` | `GEMINI_API_KEY` in `$PROFILE`, no extra installs |
 
 `gemini-api` is the preferred agy fallback. It uses stdlib `urllib` with no
 additional dependencies and cascades through five models in order, each with an
@@ -159,7 +175,7 @@ gemini-3.1-flash-lite → gemini-2.5-flash-lite
 
 Lite models are last-resort. The pipeline prints a warning when one is selected,
 since output quality may be lower. They are acceptable for file search and
-grounding tasks — grounding RPD is generous (1500/day for default, Gemini 2.5,
+grounding tasks. Grounding RPD is generous (1500/day for default, Gemini 2.5,
 and Gemini 2 keys).
 
 A 429 on any model marks it cooled-down and immediately retries on the next.
@@ -206,12 +222,12 @@ unlimited TPM). Keep code writing and architectural decisions on the main Claude
 session or the `default` / `research` profiles.
 
 Gemma 4 model IDs used by scout on alt backends (both confirmed working via gemini-cli):
-- `gemma-4-31b-it` — full 31B model, primary
-- `gemma-4-26b-a4b-it` — 26B MoE with 4B active params, faster fallback
+- `gemma-4-31b-it`: full 31B model, primary
+- `gemma-4-26b-a4b-it`: 26B MoE with 4B active params, faster fallback
 
 Adding another backend means one `run_<backend>()` function, one
 `run_<backend>_backend()` wrapper, one branch in `gemini_delegate.py:main()`,
-and an entry in the `BACKENDS` tuple — `run_with_fallback` is shared by all.
+and an entry in the `BACKENDS` tuple. `run_with_fallback` is shared by all.
 
 ## When Agents Should Delegate
 

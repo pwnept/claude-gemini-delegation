@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run a sandboxed worker backend with model-pool fallback.
+Run agy (Antigravity) CLI with model-pool fallback.
 
 Usage:
     python gemini_delegate.py [prompt]
@@ -33,10 +33,14 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-# All Gemini models share a single quota pool in agy, so tier variants
-# (Medium/High/Low) offer no real fallback benefit. One model per profile.
+# All Gemini models share a single quota pool in agy; no auto-fallback.
+# On capacity, print a --models hint so the caller can retry explicitly.
+# Three-model preset: skim -> Flash (Low), default/scout -> Flash (High),
+# research -> Pro (High). Profiles differ by system-prompt persona too
+# (see _PROFILE_PREAMBLES).
 DEFAULT_MODELS = ["Gemini 3.5 Flash (High)"]
 RESEARCH_MODELS = ["Gemini 3.1 Pro (High)"]
+SKIM_MODELS = ["Gemini 3.5 Flash (Low)"]
 
 # Keep the full known-model list for --models overrides and prefix validation.
 KNOWN_AGY_MODELS = [
@@ -98,6 +102,62 @@ LAST_MODEL_USED: str | None = None
 # detect_caller() auto-detects the harness from DELEGATION_CALLER env token
 # (set by installer) with a vendor-env-sniff fallback.
 from .caller import detect_caller, resolve_log_dir  # noqa: E402
+
+# Injected into every agy prompt. Keeps the idle watchdog alive via progress
+# updates and gives a clean extraction point for the final answer.
+_AGY_RESPONSE_FORMAT = (
+    "IMPORTANT RESPONSE FORMAT:\n"
+    "1. Start immediately with exactly 'working' on its own line: "
+    "this confirms receipt and resets the idle watchdog.\n"
+    "2. While working, output intermediate findings as you progress: "
+    "each update resets the idle watchdog.\n"
+    "3. End with exactly 'Final delegation answer:' on its own line, "
+    "followed by your complete consolidated answer.\n\n"
+)
+
+# Per-profile persona lines. Profiles differ by system prompt, not just model:
+# the delegate is a librarian returning fact-based digests, never a developer.
+_PROFILE_PERSONAS = {
+    "skim": (
+        "ROLE: You are a high-speed haystack scanner. The task is an ultra-broad "
+        "search (grep-at-scale, 'does this string appear anywhere', firehose log "
+        "triage). Do NOT reason deeply. Return a terse digest: matches found, "
+        "file paths / locations, counts. No prose, no analysis.\n\n"
+    ),
+    "research": (
+        "ROLE: You are a deep research librarian. Search the web and docs, "
+        "synthesize findings into a fact-based digest with citations and short "
+        "conclusions. Report facts and locations. Do not write code or make "
+        "architecture decisions.\n\n"
+    ),
+    "default": (
+        "ROLE: You are a codebase librarian. Traverse files, map where things "
+        "live, answer 'where does X live / who calls Y' style questions. Return "
+        "a fact-based digest: findings, file paths, counts, short answer. Do not "
+        "write code or make design decisions.\n\n"
+    ),
+}
+_PROFILE_PERSONAS["scout"] = _PROFILE_PERSONAS["default"]
+
+
+def _agy_preamble(profile: str) -> str:
+    return _PROFILE_PERSONAS.get(profile, _PROFILE_PERSONAS["default"]) + _AGY_RESPONSE_FORMAT
+
+
+def default_agy_models(profile: str) -> list:
+    """Default agy model order for a profile, the ONE profile->model mapping.
+
+    scout has no agy Gemma models, so it shares the default Flash tier.
+    """
+    if profile == "research":
+        return RESEARCH_MODELS
+    if profile == "skim":
+        return SKIM_MODELS
+    return DEFAULT_MODELS
+
+
+_WORKING_SENTINEL = "working"
+_FINAL_ANSWER_MARKER = "Final delegation answer:"
 
 CAPACITY_PATTERNS = (
     "exhausted your capacity",
@@ -418,7 +478,9 @@ def run_api_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
     if model_order is None:
         if args.profile == "research":
             model_order = ",".join(RESEARCH_API_MODELS)
-        elif args.profile == "scout":
+        elif args.profile in ("scout", "skim"):
+            # skim has no dedicated API tier; scout models are the matching
+            # cheap/low-reasoning choice, never the default tier.
             model_order = ",".join(SCOUT_API_MODELS)
         else:
             model_order = ",".join(DEFAULT_API_MODELS)
@@ -463,12 +525,71 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text).replace("\r\n", "\n").replace("\r", "\n")
 
 
+# agy prompts this on first run in a directory; the cursor starts on
+# "Yes, I trust this folder" so a bare Enter confirms.
+TRUST_PROMPT = "Do you trust the contents"
+
+
+def confirm_trust_prompt(pty, buf: str, already_confirmed: bool) -> bool:
+    """Auto-confirm agy's first-run trust dialog once it appears in `buf`.
+
+    Returns the new confirmed state. Single source of truth for the dialog
+    text and the settle-then-Enter keystroke, shared by the one-shot runner
+    and the persistent delegate host.
+    """
+    if already_confirmed or TRUST_PROMPT not in buf:
+        return already_confirmed
+    time.sleep(0.3)  # let the dialog finish painting before answering
+    pty.write("\r")
+    return True
+
+
+def _extract_final_answer(output: str) -> str:
+    """Return the section after 'Final delegation answer:' if present, else full output."""
+    lowered = output.lower()
+    idx = lowered.rfind(_FINAL_ANSWER_MARKER.lower())
+    if idx == -1:
+        return output
+    return output[idx + len(_FINAL_ANSWER_MARKER):].lstrip("\n").strip()
+
+
+def _save_timing_log(transcript_path: Path, timing: dict, model: str) -> None:
+    """Write a sibling _timing.txt next to the transcript for later review."""
+    timing_path = transcript_path.parent / (transcript_path.stem + "_timing.txt")
+    now_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    start = timing.get("start", 0.0)
+
+    def _delta(key: str) -> str:
+        val = timing.get(key)
+        return f"{val - start:.2f}s" if val is not None else "n/a"
+
+    lines = [
+        "timing_log_version: 1",
+        f"timestamp_utc: {now_utc}",
+        f"model: {model}",
+        f"total_seconds: {timing.get('end', start) - start:.2f}",
+        f"first_chunk_seconds: {_delta('first_chunk_at')}",
+        f"sentinel_seconds: {_delta('sentinel_at')}",
+        f"final_answer_seconds: {_delta('final_answer_at')}",
+        f"kill_reason: {timing.get('kill_reason') or 'none'}",
+        f"idle_timeout_seconds: {timing.get('idle_timeout', 'n/a')}",
+        f"first_response_seconds: {timing.get('first_response_seconds', 'n/a')}",
+        f"transcript: {transcript_path.name}",
+    ]
+    try:
+        timing_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass  # timing log is best-effort
+
+
 def run_agy(
     command: str,
     model: str,
     prompt: str,
     timeout: int,
     idle_timeout: int = 30,
+    first_response_seconds: int = 45,
+    timing: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Run agy and return captured output.
 
@@ -521,6 +642,14 @@ def run_agy(
     start = time.monotonic()
     kill_reason = None
     trust_confirmed = False
+    sentinel_seen = False  # True once model outputs "working"
+    final_answer_seen = False
+
+    if timing is not None:
+        timing.update({
+            "start": start, "idle_timeout": idle_timeout,
+            "first_response_seconds": first_response_seconds,
+        })
 
     while True:
         now = time.monotonic()
@@ -528,12 +657,24 @@ def run_agy(
         if chunk:
             buf += chunk
             last_activity = now
-            # agy prompts "Do you trust…" on first run in a directory;
-            # the cursor starts on "Yes, I trust this folder" so Enter confirms.
-            if not trust_confirmed and "Do you trust the contents" in buf:
-                time.sleep(0.3)
-                pty.write("\r")
-                trust_confirmed = True
+            if timing is not None and "first_chunk_at" not in timing:
+                timing["first_chunk_at"] = now
+            trust_confirmed = confirm_trust_prompt(pty, buf, trust_confirmed)
+            # Kill immediately when a capacity/429 signal appears. agy will go
+            # idle after printing it and the idle timeout would waste 60-90s.
+            if capacity_limited(buf):
+                kill_reason = "capacity"
+                os.kill(pty.pid, signal.SIGTERM)
+                break
+            stripped = _strip_ansi(buf).lower()
+            if not sentinel_seen and _WORKING_SENTINEL in stripped:
+                sentinel_seen = True
+                if timing is not None:
+                    timing["sentinel_at"] = now
+            if not final_answer_seen and _FINAL_ANSWER_MARKER.lower() in stripped:
+                final_answer_seen = True
+                if timing is not None:
+                    timing["final_answer_at"] = now
         elif not pty.isalive():
             # drain any remaining PTY buffer
             while True:
@@ -543,8 +684,11 @@ def run_agy(
                 buf += tail
             break
         else:
-            if idle_timeout > 0 and (now - last_activity) >= idle_timeout:
-                kill_reason = "idle"
+            # Two-phase idle: short window until model sends "working", then full idle_timeout.
+            # Each progress update from the model resets last_activity, keeping long tasks alive.
+            current_idle = idle_timeout if sentinel_seen else first_response_seconds
+            if current_idle > 0 and (now - last_activity) >= current_idle:
+                kill_reason = "idle" if sentinel_seen else "first-response"
                 os.kill(pty.pid, signal.SIGTERM)
                 break
             if timeout > 0 and (now - start) >= timeout:
@@ -555,13 +699,22 @@ def run_agy(
 
     stdout = _strip_ansi(buf)
 
+    if timing is not None:
+        timing["end"] = time.monotonic()
+        timing["kill_reason"] = kill_reason
+
     if kill_reason:
-        secs = idle_timeout if kill_reason == "idle" else timeout
+        if kill_reason == "idle":
+            secs = idle_timeout
+        elif kill_reason == "first-response":
+            secs = first_response_seconds
+        else:
+            secs = timeout
         raise subprocess.TimeoutExpired(
             cmd=[command, "--add-dir", workspace_dir, "--model", model],
             timeout=secs,
             output=stdout,
-            stderr="",
+            stderr="capacity-limited" if kill_reason == "capacity" else "",
         )
 
     exit_status = pty.get_exitstatus()
@@ -637,7 +790,7 @@ def _delegation_log_root() -> Path:
     configured = os.environ.get("DELEGATION_LOG_ROOT")
     if configured:
         return Path(os.path.expandvars(os.path.expanduser(configured)))
-    return Path.home() / ".agent-delegation"
+    return Path.home() / ".gemini_delegation"
 
 
 def _write_numbered_delegation_log(log_dir: Path, turn_slug: str, content: str) -> Path:
@@ -666,8 +819,7 @@ def _save_delegation_transcript(
         return None
 
     try:
-        configured_workspace = os.environ.get("AGENT_DELEGATION_WORKSPACE")
-        repo_root = Path(configured_workspace).resolve() if configured_workspace else agent_dir.parent
+        repo_root = agent_dir.parent
         context = _load_caller_session(agent_dir)
         caller = _safe_path_part(_caller_name(args, context))
         project_slug = _project_slug(repo_root)
@@ -678,7 +830,7 @@ def _save_delegation_transcript(
             / "runs"
             / caller
             / project_slug
-            / f"{session_slug}_agent_delegation"
+            / f"{session_slug}_gemini_delegation"
         )
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         content = "\n".join(
@@ -712,7 +864,7 @@ def _save_delegation_transcript(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a sandboxed worker with capacity-aware fallback.")
+    parser = argparse.ArgumentParser(description="Run agy CLI with capacity-aware model fallback.")
     parser.add_argument("prompt", nargs="?", help="Prompt to send. If omitted, stdin is used.")
     parser.add_argument(
         "--models",
@@ -723,9 +875,33 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--profile",
-        choices=("default", "research", "scout"),
+        choices=("default", "research", "scout", "skim"),
         default="default",
-        help="Model order profile. Research uses Pro; scout uses Gemma 4 for read-heavy tasks.",
+        help="Model order profile. Research uses Pro (High); skim uses Flash (Low) for "
+             "ultra-broad haystack searches; scout uses Flash on agy (Gemma 4 on gemini-cli/api).",
+    )
+    parser.add_argument(
+        "--pre-format",
+        action="store_true",
+        help="Treat the input as a raw task and format it via pre_delegate before sending "
+             "(replaces a separate pre_delegate.py invocation).",
+    )
+    parser.add_argument(
+        "--context",
+        default="General task",
+        help="Task context used by --pre-format.",
+    )
+    parser.add_argument(
+        "--max-lines",
+        type=int,
+        default=0,
+        help="Response line budget used by --pre-format/--post-validate. 0 = auto.",
+    )
+    parser.add_argument(
+        "--post-validate",
+        action="store_true",
+        help="Validate the response and log metrics after a successful delegation "
+             "(replaces a separate post_delegate.py invocation). Warnings go to stderr.",
     )
     parser.add_argument(
         "--backend",
@@ -783,6 +959,33 @@ def parse_args() -> argparse.Namespace:
              "When provided, skips the cwd up-walk in find_agent_dir().",
     )
     return parser.parse_args()
+
+
+def _post_validate(response: str, args: argparse.Namespace) -> None:
+    """Inline post_delegate validation + metrics; stdout stays the pure response."""
+    try:
+        import contextlib
+
+        try:
+            from . import post_delegate
+        except ImportError:
+            import post_delegate
+        agent_dir = Path(args.agent_dir) if args.agent_dir else find_agent_dir(Path.cwd())
+        metrics_dir = resolve_log_dir(args.caller, agent_dir / "metrics")
+        max_lines = getattr(args, "max_lines", 0) or 10
+        with contextlib.redirect_stdout(sys.stderr):
+            _, warnings = post_delegate.validate_response(response, max_lines)
+            for warning in warnings:
+                print(warning)
+        label = getattr(args, "_task_label", None) or getattr(args, "context", "unknown")
+        post_delegate.log_metrics(
+            label,
+            post_delegate.count_lines(response),
+            post_delegate.estimate_tokens(response),
+            metrics_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - validation is best-effort, never fail the run
+        print(f"[WARN] post-validate failed: {exc}", file=sys.stderr)
 
 
 def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, attempt, *, on_success=None) -> int:
@@ -850,6 +1053,8 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
                 print("Model used: {0}".format(model), file=sys.stderr)
             if not args.no_save and on_success:
                 on_success(output, model)
+            if getattr(args, "post_validate", False):
+                _post_validate(output, args)
             sys.stdout.write(output)
             if not args.no_state:
                 state.setdefault("cooldowns", {}).pop(model, None)
@@ -859,12 +1064,17 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
         if capacity_limited(combined):
             cooldown = mark_cooldown(model, state, combined, time.time(), args.cooldown_seconds)
             print(
-                "{0} is capacity-limited; cooling down for {1}s and trying next model.".format(model, cooldown),
+                "{0} is capacity-limited (cooldown {1}s). "
+                "Retry with: --models \"Gemini 3.1 Pro (High)\"".format(model, cooldown),
                 file=sys.stderr,
             )
             continue
 
         if output:
+            # Failed run that still produced output: quota was spent and the
+            # caller sees the text, so it must land in the metrics too.
+            if getattr(args, "post_validate", False):
+                _post_validate(output, args)
             sys.stdout.write(output)
         if error:
             sys.stderr.write(error)
@@ -876,10 +1086,13 @@ def run_with_fallback(models: list, state_path: Path, args: argparse.Namespace, 
         save_state(state_path, state)
 
     print("All models are currently capacity-limited or unavailable.", file=sys.stderr)
+    print("Retry with a different model: --models \"Gemini 3.1 Pro (High)\"", file=sys.stderr)
     if skipped:
         print("Skipped due to cooldown: {0}".format(", ".join(skipped)), file=sys.stderr)
     if last_result is not None:
         if last_result.stdout:
+            if getattr(args, "post_validate", False):
+                _post_validate(last_result.stdout, args)
             sys.stdout.write(last_result.stdout)
         if last_result.stderr:
             sys.stderr.write(last_result.stderr)
@@ -896,7 +1109,9 @@ def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
     if model_order is None:
         if args.profile == "research":
             model_order = ",".join(RESEARCH_CLI_MODELS)
-        elif args.profile == "scout":
+        elif args.profile in ("scout", "skim"):
+            # skim has no dedicated CLI tier; the scout models are the
+            # matching cheap/low-reasoning choice, never the default tier.
             model_order = ",".join(SCOUT_CLI_MODELS)
         else:
             model_order = ",".join(DEFAULT_CLI_MODELS)
@@ -928,6 +1143,27 @@ def run_cli_backend(prompt: str, args: argparse.Namespace, claude_dir: Path) -> 
 
 
 def main() -> int:
+    try:
+        current_depth = int(os.environ.get("AGENT_DELEGATION_DEPTH", "0") or "0")
+    except ValueError:
+        current_depth = 0
+    if current_depth >= 1:
+        print("Nested delegation rejected: a delegate cannot create another delegate.", file=sys.stderr)
+        return 2
+
+    previous_depth = os.environ.get("AGENT_DELEGATION_DEPTH")
+    os.environ["AGENT_DELEGATION_DEPTH"] = "1"
+    try:
+        return _main()
+    finally:
+        if previous_depth is None:
+            os.environ.pop("AGENT_DELEGATION_DEPTH", None)
+        else:
+            os.environ["AGENT_DELEGATION_DEPTH"] = previous_depth
+
+
+def _main() -> int:
+
     args = parse_args()
 
     backend = resolve_backend(args)
@@ -938,17 +1174,46 @@ def main() -> int:
         )
         return 2
 
+    if backend == "agy" and os.environ.get("AGENT_DELEGATION_AGY_VALIDATED") != "1":
+        print(
+            "agy delegation is disabled until its permission hook passes the reviewed live smoke.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if backend == "gemini-cli":
+        print(
+            "[alt-backend: gemini-cli] Primary backend is agy; gemini-cli is in use (npm required).",
+            file=sys.stderr,
+        )
+    elif backend == "gemini-api":
+        print(
+            "[alt-backend: gemini-api] Primary backend is agy; gemini-api is in use "
+            "(direct REST, no grounding or CLI features; needs GEMINI_API_KEY).",
+            file=sys.stderr,
+        )
+
     # Increase idle timeout for research profile if not explicitly overridden
     if args.profile == "research" and args.idle_timeout_seconds == 60:
         args.idle_timeout_seconds = 120
-    if args.profile == "scout" and args.idle_timeout_seconds == 60:
-        args.idle_timeout_seconds = 90
+    if args.profile in ("scout", "skim") and args.idle_timeout_seconds == 60:
+        args.idle_timeout_seconds = 45  # Flash responds fast; long idle means it's stuck
 
     prompt = args.prompt if args.prompt is not None else sys.stdin.read()
     prompt = prompt.strip()
     if not prompt:
         print("No prompt provided.", file=sys.stderr)
         return 2
+
+    if args.pre_format:
+        # Fold the pre_delegate step into this process (one Python spawn per call).
+        from . import pre_delegate
+        task = pre_delegate.expand_paths(prompt)
+        task_type = pre_delegate.detect_task_type(task)
+        max_lines = args.max_lines or pre_delegate.estimate_compression(task)
+        args.max_lines = max_lines
+        args._task_label = task
+        prompt = pre_delegate.build_prompt(task_type, task, args.context, max_lines)
 
     claude_dir = Path(args.agent_dir) if args.agent_dir else find_agent_dir(Path.cwd())
 
@@ -961,8 +1226,7 @@ def main() -> int:
     # backend == "agy"
     model_order = args.models
     if model_order is None:
-        model_order = ",".join(RESEARCH_MODELS if args.profile == "research" else DEFAULT_MODELS)
-        # scout profile has no agy Gemma models; fall through to default Flash
+        model_order = ",".join(default_agy_models(args.profile))
 
     models = parse_model_order(model_order)
     if not models:
@@ -981,15 +1245,32 @@ def main() -> int:
     )
     command = resolve_agy_command()
 
+    augmented_prompt = _agy_preamble(args.profile) + prompt
+    timing: dict = {}
+
     def attempt(model: str) -> subprocess.CompletedProcess:
-        return run_agy(
-            command, model, prompt,
+        timing.clear()
+        result = run_agy(
+            command, model, augmented_prompt,
             timeout=args.timeout_seconds,
             idle_timeout=args.idle_timeout_seconds,
+            first_response_seconds=45,
+            timing=timing,
         )
+        if result.returncode == 0 and result.stdout:
+            filtered = _extract_final_answer(result.stdout)
+            result = subprocess.CompletedProcess(
+                args=result.args,
+                returncode=result.returncode,
+                stdout=filtered,
+                stderr=result.stderr,
+            )
+        return result
 
     def _on_success(output: str, model: str) -> None:
-        _save_delegation_transcript(prompt, output, model, claude_dir, args, "agy")
+        dest = _save_delegation_transcript(prompt, output, model, claude_dir, args, "agy")
+        if dest and timing:
+            _save_timing_log(dest, timing, model)
 
     return run_with_fallback(models, state_path, args, attempt, on_success=_on_success)
 

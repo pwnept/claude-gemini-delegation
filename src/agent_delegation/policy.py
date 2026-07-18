@@ -9,6 +9,7 @@ from pathlib import Path
 DEFAULT_POLICY = {
     "schema": 1,
     "description": "Managed read-only terminal capabilities for depth-1 delegates.",
+    "agy_print_mode_enabled": False,
     "command_prefixes": [
         ["rg"],
         ["fd"],
@@ -119,6 +120,9 @@ def load_policy() -> dict:
     return {
         "schema": 1,
         "command_prefixes": prefixes,
+        "agy_print_mode_enabled": bool(
+            local.get("agy_print_mode_enabled", base.get("agy_print_mode_enabled", False))
+        ),
         "permanent_denials": list(DEFAULT_POLICY["permanent_denials"]),
         "permanent_denied_prefixes": list(DEFAULT_POLICY["permanent_denied_prefixes"]),
     }
