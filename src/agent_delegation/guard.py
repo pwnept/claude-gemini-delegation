@@ -242,6 +242,13 @@ def _path_operands(tokens: list[str]) -> list[str]:
 def _cluster_denial(command: str, token: str) -> str | None:
     if not token.startswith("-") or token.startswith("--") or len(token) < 2:
         return None
+    if len(token) > 2:
+        if command == "rg" and token[:2] in {
+            "-A", "-B", "-C", "-e", "-f", "-g", "-m", "-t", "-T",
+        }:
+            return None
+        if command == "fd" and token[:2] in {"-d", "-e", "-E", "-j", "-S", "-t"}:
+            return None
     cluster = token[1:]
     if command in {"rg", "fd"} and "L" in cluster:
         return "follow-symlink short option is denied"

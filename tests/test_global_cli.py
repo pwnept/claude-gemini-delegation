@@ -25,6 +25,35 @@ class TestGlobalPolicy(unittest.TestCase):
             rendered,
         )
         self.assertNotIn(("git", "commit"), rendered)
+        self.assertNotIn(("git", "status"), rendered)
+        self.assertIn(("git", "-c", "core.fsmonitor=false", "status"), rendered)
+
+    def test_safe_git_status_disables_repository_fsmonitor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = root / "repo"
+            sentinel = root / "fsmonitor-ran.txt"
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+            hook = root / "fsmonitor.py"
+            hook.write_text(
+                f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n",
+                encoding="ascii",
+            )
+            hook_command = f"'{Path(sys.executable).as_posix()}' '{hook.as_posix()}'"
+            subprocess.run(
+                ["git", "config", "core.fsmonitor", hook_command],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(["git", "status", "--short"], cwd=repo, check=True)
+            self.assertTrue(sentinel.is_file())
+            sentinel.unlink()
+            subprocess.run(
+                ["git", "-c", "core.fsmonitor=false", "status", "--short"],
+                cwd=repo,
+                check=True,
+            )
+            self.assertFalse(sentinel.exists())
 
     def test_run_scoped_extension_is_added(self):
         prefixes = policy.command_prefixes(policy.DEFAULT_POLICY, ["python -m pytest"])
@@ -215,9 +244,15 @@ class TestCommandGuard(unittest.TestCase):
             'rg "what?" src',
             'rg "[A-Z]" src',
             'rg -e "foo.*bar" src',
+            'rg -efizz .',
+            'rg -g*.gz needle .',
+            'fd -exml .',
+            'fd -Eexample needle .',
         ):
             with self.subTest(command=command):
-                self.assertTrue(guard.is_allowed(command, [["rg"]], workspace)[0])
+                self.assertTrue(
+                    guard.is_allowed(command, [[command.split()[0]]], workspace)[0]
+                )
 
     def test_guard_confines_file_valued_options(self):
         with tempfile.TemporaryDirectory() as tmpdir:

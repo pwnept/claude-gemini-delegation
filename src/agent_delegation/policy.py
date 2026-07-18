@@ -13,7 +13,7 @@ DEFAULT_POLICY = {
     "command_prefixes": [
         ["rg"],
         ["fd"],
-        ["git", "status"],
+        ["git", "-c", "core.fsmonitor=false", "status"],
         ["git", "--no-pager", "diff", "--no-ext-diff", "--no-textconv"],
         ["git", "--no-pager", "log", "--no-ext-diff", "--no-textconv", "--no-show-signature"],
         ["git", "--no-pager", "show", "--no-ext-diff", "--no-textconv", "--no-show-signature"],
