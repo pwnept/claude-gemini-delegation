@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -141,6 +142,9 @@ def _install_agy_hook() -> Path:
                 raise CliError(f"Cannot update agy hooks file {path}: top level must be an object")
         except ValueError as exc:
             raise CliError(f"Cannot update invalid agy hooks file {path}: {exc}") from exc
+    guard_command = subprocess.list2cmdline(
+        [str(Path(sys.executable).resolve()), "-m", "agent_delegation.cli", "guard"]
+    )
     hooks["agent-delegation-command-policy"] = {
         "enabled": True,
         "PreToolUse": [
@@ -149,14 +153,33 @@ def _install_agy_hook() -> Path:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "agent-delegation guard",
+                        "command": guard_command,
                         "timeout": 5,
                     }
                 ],
             }
         ],
     }
-    path.write_text(json.dumps(hooks, indent=2) + "\n", encoding="utf-8")
+    content = json.dumps(hooks, indent=2) + "\n"
+    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    if path.exists():
+        backup = path.with_name(f"{path.name}.backup-{time.strftime('%Y%m%d-%H%M%S')}")
+        suffix = 1
+        while backup.exists():
+            backup = path.with_name(
+                f"{path.name}.backup-{time.strftime('%Y%m%d-%H%M%S')}-{suffix}"
+            )
+            suffix += 1
+        shutil.copy2(path, backup)
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
     return path
 
 

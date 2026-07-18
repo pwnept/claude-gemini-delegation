@@ -100,6 +100,32 @@ def _archive_native(record: dict, ddir: Path) -> None:
     )
 
 
+def _recover_internal_failure(command: str, delegate_id: str, exc: BaseException) -> None:
+    ddir = delegate_dir(delegate_id)
+    record = load_record(delegate_id)
+    if record is None:
+        return
+    pid_key = "agy_pid" if command == "host" else "runner_pid"
+    pid = int(record.get(pid_key) or 0)
+    if pid > 0:
+        _kill_tree(pid)
+    record.update(
+        status="dead" if command == "host" else "error",
+        last_activity=time.time(),
+        internal_error=f"{type(exc).__name__}: {exc}",
+        **{pid_key: None},
+    )
+    save_record(record)
+    _archive_native(record, ddir)
+    if command == "run-oneshot":
+        status_line = f"status: error ({type(exc).__name__})"
+        (ddir / "result.md").write_text(
+            status_line + "\n\n" + str(exc) + "\n",
+            encoding="utf-8",
+        )
+        _write_marker(ddir, "done", status_line)
+
+
 def delegate_dir(delegate_id: str) -> Path:
     return delegates_root() / delegate_id
 
@@ -368,6 +394,8 @@ def cmd_run_oneshot(args: argparse.Namespace) -> int:
         cwd=record.get("workspace") or None,
         env={**os.environ, "AGENT_DELEGATION_DEPTH": "0"},
     )
+    record["runner_pid"] = proc.pid
+    save_record(record)
     comm: dict = {}
 
     def _communicate():
@@ -415,7 +443,7 @@ def cmd_run_oneshot(args: argparse.Namespace) -> int:
     (ddir / "result.md").write_text(status_line + "\n\n" + answer + "\n", encoding="utf-8")
     done_event.set()
 
-    record.update(status=status, last_activity=time.time(), turn_count=1)
+    record.update(status=status, last_activity=time.time(), turn_count=1, runner_pid=None)
     save_record(record)
     _archive_native(record, ddir)
     _write_marker(ddir, "done", status_line)
@@ -600,6 +628,7 @@ def cmd_host(args: argparse.Namespace) -> int:
         print("persistent delegates require the Windows winpty path", file=sys.stderr)
         record["status"] = "dead"
         save_record(record)
+        alive.release()
         return 2
 
     try:
@@ -634,7 +663,12 @@ def cmd_host(args: argparse.Namespace) -> int:
     pty = winpty.PTY(220, 50)
     pty.spawn(command, cmdline=cmdline, cwd=workspace)
 
-    record.update(pid=os.getpid(), status="idle", last_activity=time.time())
+    record.update(
+        pid=os.getpid(),
+        agy_pid=pty.pid,
+        status="idle",
+        last_activity=time.time(),
+    )
     save_record(record)
 
     created = record.get("created_at", time.time())
@@ -677,7 +711,11 @@ def cmd_host(args: argparse.Namespace) -> int:
             print(f"[host] pty.log dump failed: {exc}", file=sys.stderr, flush=True)
 
     def _finish(status: str) -> int:
-        finished_record = _update_record(status=status, last_activity=time.time())
+        finished_record = _update_record(
+            status=status,
+            agy_pid=None,
+            last_activity=time.time(),
+        )
         _dump_pty_log(final=True)
         try:
             if pty.isalive():
@@ -1023,7 +1061,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except BaseException as exc:  # noqa: BLE001
+        if args.command in {"host", "run-oneshot"}:
+            _recover_internal_failure(args.command, args.id, exc)
+            print(f"internal delegate {args.command} failed: {exc}", file=sys.stderr)
+            return 2
+        raise
 
 
 if __name__ == "__main__":

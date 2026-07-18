@@ -25,6 +25,15 @@ class FakeResult:
 
 
 class TestAgyDelegate(unittest.TestCase):
+    def setUp(self):
+        self.validation = mock.patch.dict(
+            os.environ, {"AGENT_DELEGATION_AGY_VALIDATED": "1"}, clear=False
+        )
+        self.validation.start()
+
+    def tearDown(self):
+        self.validation.stop()
+
     def test_capacity_detection(self):
         self.assertTrue(gemini_delegate.capacity_limited("status 429 Too Many Requests"))
         self.assertTrue(gemini_delegate.capacity_limited("No capacity available for model"))
@@ -170,6 +179,13 @@ class TestAgyDelegate(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(calls, ["Gemini 3.1 Pro (High)"])
+
+    def test_unvalidated_agy_is_rejected_before_launch(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(sys, "argv", ["gemini_delegate.py", "hello"]):
+                with mock.patch.object(gemini_delegate, "run_agy") as run_agy:
+                    self.assertEqual(gemini_delegate.main(), 2)
+        run_agy.assert_not_called()
 
 
 class TestDelegationTranscriptLogs(unittest.TestCase):
@@ -347,6 +363,25 @@ class TestBackendSelection(unittest.TestCase):
 
 
 class TestGeminiCliBackend(unittest.TestCase):
+    def test_windows_shim_resolves_to_node_entrypoint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            shim = root / "gemini.cmd"
+            script = root / "node_modules" / "@google" / "gemini-cli" / "bundle" / "gemini.js"
+            script.parent.mkdir(parents=True)
+            shim.write_text("@echo off\n", encoding="utf-8")
+            script.write_text("", encoding="utf-8")
+            with mock.patch.object(gemini_delegate.os, "name", "nt"):
+                with mock.patch.object(
+                    gemini_delegate.shutil,
+                    "which",
+                    side_effect=lambda name: str(shim) if name == "gemini" else "C:/node.exe",
+                ):
+                    self.assertEqual(
+                        gemini_delegate._gemini_cli_argv_prefix(),
+                        ["C:/node.exe", str(script)],
+                    )
+
     def test_gemini_cli_backend_falls_back_after_capacity_error(self):
         calls = []
 

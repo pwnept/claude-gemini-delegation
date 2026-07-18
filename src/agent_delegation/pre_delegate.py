@@ -9,7 +9,7 @@ Usage:
 
 Example:
     python3 pre_delegate.py "npm ls" "Debugging slow build" 8
-""" 
+"""
 
 import sys
 import re
@@ -40,7 +40,7 @@ def expand_paths(task: str) -> str:
 def detect_task_type(task: str) -> TaskType:
     """Detect task type from task description."""
     task_lower = task.lower()
-    
+
     # Search operations
     if re.search(r'^(grep|find)\s|(?:search|find.*file|grep.*code|locate)', task_lower):
         return "search"
@@ -48,30 +48,30 @@ def detect_task_type(task: str) -> TaskType:
     # Shell commands
     if re.search(r'^(git|npm|pip|ls|cat|echo|curl|wget)\s', task_lower):
         return "shell"
-    
+
     # Analysis tasks
     if re.search(r'(analyze|review|audit|check|inspect|investigate)', task_lower):
         return "analyze"
-    
+
     # Documentation lookup
     if re.search(r'(doc|documentation|api|how.*use|example)', task_lower):
         return "docs"
-    
+
     return "generic"
 
 
 def estimate_compression(task: str) -> int:
     """Estimate optimal compression level based on expected output."""
     task_lower = task.lower()
-    
+
     # Highly verbose commands need aggressive compression
     if re.search(r'(npm ls|git log|find\s|pip freeze)', task_lower):
         return 5  # Maximum 5 lines
-    
+
     # Search/audit operations
     if re.search(r'(grep|search|audit|scan)', task_lower):
         return 8
-    
+
     # Default
     return 10
 
@@ -149,7 +149,7 @@ def build_prompt(task_type: TaskType, task: str, context: str, max_lines: int) -
         "docs": build_docs_prompt,
         "generic": build_generic_prompt,
     }
-    
+
     builder = builders.get(task_type, build_generic_prompt)
     return builder(task, context, max_lines)
 
@@ -159,7 +159,7 @@ def main():
     if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
         print(__doc__)
         sys.exit(1)
-    
+
     task_arg = sys.argv[1]
     if task_arg == "-" or not task_arg:
         task = sys.stdin.read().strip()
@@ -170,15 +170,15 @@ def main():
         task = task_arg
         context = sys.argv[2] if len(sys.argv) > 2 else "General task"
         max_lines = int(sys.argv[3]) if len(sys.argv) > 3 else None
-    
+
     # Expand @ paths in task
     task = expand_paths(task)
-    
+
     # Detect task type and optimal compression
     task_type = detect_task_type(task)
     optimal_lines = estimate_compression(task)
     max_lines = max_lines or optimal_lines
-    
+
     # Build and output prompt
     prompt = build_prompt(task_type, task, context, max_lines)
     print(prompt)

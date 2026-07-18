@@ -4,8 +4,9 @@ import json
 import os
 import shlex
 import sys
+from pathlib import Path
 
-from .cli import ALLOW_ENV, DEPTH_ENV
+from .cli import ALLOW_ENV, DEPTH_ENV, WORKSPACE_ENV
 from .policy import DEFAULT_POLICY
 
 
@@ -77,7 +78,52 @@ def _tokens(command: str) -> list[str]:
         return []
 
 
-def is_allowed(command: str, prefixes: list[list[str]]) -> tuple[bool, str]:
+def _path_argument(token: str) -> str:
+    lowered = token.lower()
+    for name in ("-path:", "-literalpath:"):
+        if lowered.startswith(name):
+            return token[len(name):]
+    if token.startswith("-") and "=" in token:
+        return token.split("=", 1)[1]
+    return token
+
+
+def _outside_workspace(tokens: list[str], workspace: str) -> str | None:
+    root = Path(workspace).resolve()
+    for token in tokens[1:]:
+        candidate = _path_argument(token).strip().strip('"')
+        if not candidate or candidate.startswith("-"):
+            continue
+        lowered = candidate.lower()
+        if lowered.startswith(("~", "\\\\", "//")):
+            return candidate
+        if ":" in candidate and not (
+            len(candidate) >= 3 and candidate[1] == ":" and candidate[2] in {"\\", "/"}
+        ):
+            return candidate
+        path = Path(candidate)
+        looks_like_path = (
+            path.is_absolute()
+            or "/" in candidate
+            or "\\" in candidate
+            or candidate.startswith(".")
+            or (root / path).exists()
+        )
+        if not looks_like_path:
+            continue
+        try:
+            resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
+            resolved.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            return candidate
+    return None
+
+
+def is_allowed(
+    command: str,
+    prefixes: list[list[str]],
+    workspace: str | None = None,
+) -> tuple[bool, str]:
     tokens = _tokens(command)
     if not tokens:
         return False, "compound, redirected, or unparsable commands are denied"
@@ -95,6 +141,10 @@ def is_allowed(command: str, prefixes: list[list[str]]) -> tuple[bool, str]:
         name = token.split("=", 1)[0]
         if name in FORBIDDEN_ARGUMENTS:
             return False, f"argument {name} is denied"
+    if workspace:
+        outside = _outside_workspace(tokens, workspace)
+        if outside:
+            return False, f"path escapes delegated workspace: {outside}"
     for prefix in prefixes:
         candidate = [str(token).lower() for token in prefix]
         if lowered[: len(candidate)] == candidate:
@@ -117,7 +167,11 @@ def main() -> int:
         print(json.dumps({"decision": "deny", "reason": "agent-delegation guard received malformed input"}))
         return 0
     command = _command_from_payload(payload)
-    allowed, reason = is_allowed(command, prefixes)
+    workspace = os.environ.get(WORKSPACE_ENV)
+    if not workspace:
+        allowed, reason = False, "delegated workspace is missing"
+    else:
+        allowed, reason = is_allowed(command, prefixes, workspace)
     if allowed:
         print(
             json.dumps(

@@ -132,6 +132,43 @@ class TestPersistentManagerSafety(unittest.TestCase):
             self.assertEqual(manifest["native_transcripts"], archived)
             self.assertFalse(manifest["native_state_modified_by_agent_delegation"])
 
+    def test_internal_host_failure_kills_child_and_archives(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            delegate_id = "dlg-host"
+            record = {"id": delegate_id, "agy_pid": 4321, "native_before": {}}
+            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(root)}, clear=False):
+                manager.save_record(record)
+                with mock.patch.object(manager, "_kill_tree") as kill_tree:
+                    with mock.patch.object(manager, "_archive_native") as archive:
+                        manager._recover_internal_failure("host", delegate_id, RuntimeError("crash"))
+                recovered = manager.load_record(delegate_id)
+            kill_tree.assert_called_once_with(4321)
+            archive.assert_called_once()
+            self.assertEqual(recovered["status"], "dead")
+            self.assertIsNone(recovered["agy_pid"])
+            self.assertIn("RuntimeError: crash", recovered["internal_error"])
+
+    def test_internal_oneshot_failure_writes_result_and_done_marker(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            delegate_id = "dlg-oneshot"
+            record = {"id": delegate_id, "runner_pid": 9876, "native_before": {}}
+            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": str(root)}, clear=False):
+                manager.save_record(record)
+                with mock.patch.object(manager, "_kill_tree") as kill_tree:
+                    with mock.patch.object(manager, "_archive_native"):
+                        manager._recover_internal_failure(
+                            "run-oneshot", delegate_id, KeyboardInterrupt()
+                        )
+                recovered = manager.load_record(delegate_id)
+                ddir = manager.delegate_dir(delegate_id)
+                result = (ddir / "result.md").read_text(encoding="utf-8")
+            kill_tree.assert_called_once_with(9876)
+            self.assertEqual(recovered["status"], "error")
+            self.assertTrue((ddir / "done").is_file())
+            self.assertIn("KeyboardInterrupt", result)
+
 
 if __name__ == "__main__":
     unittest.main()

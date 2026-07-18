@@ -91,7 +91,11 @@ class TestCommandGuard(unittest.TestCase):
 
     def test_guard_returns_exact_temporary_grant(self):
         payload = json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "rg needle ."}}})
-        env = {cli.DEPTH_ENV: "1", cli.ALLOW_ENV: json.dumps([["rg"]])}
+        env = {
+            cli.DEPTH_ENV: "1",
+            cli.ALLOW_ENV: json.dumps([["rg"]]),
+            cli.WORKSPACE_ENV: str(Path.cwd()),
+        }
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch("sys.stdin", StringIO(payload)):
                 with mock.patch("sys.stdout", new_callable=StringIO) as stdout:
@@ -104,7 +108,11 @@ class TestCommandGuard(unittest.TestCase):
         payload = json.dumps(
             {"toolCall": {"name": "run_command", "args": {"CommandLine": '"rg DEPTH_ENV src"'}}}
         )
-        env = {cli.DEPTH_ENV: "1", cli.ALLOW_ENV: json.dumps([["rg"]])}
+        env = {
+            cli.DEPTH_ENV: "1",
+            cli.ALLOW_ENV: json.dumps([["rg"]]),
+            cli.WORKSPACE_ENV: str(Path.cwd()),
+        }
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch("sys.stdin", StringIO(payload)):
                 with mock.patch("sys.stdout", new_callable=StringIO) as stdout:
@@ -136,6 +144,31 @@ class TestCommandGuard(unittest.TestCase):
     def test_wrapped_command_preserves_inner_quoted_argument(self):
         command = json.dumps('rg "two words" src')
         self.assertTrue(guard.is_allowed(command, [["rg"]])[0])
+
+    def test_guard_denies_missing_workspace(self):
+        payload = json.dumps(
+            {"toolCall": {"name": "run_command", "args": {"CommandLine": "rg needle ."}}}
+        )
+        env = {cli.DEPTH_ENV: "1", cli.ALLOW_ENV: json.dumps([["rg"]])}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("sys.stdin", StringIO(payload)):
+                with mock.patch("sys.stdout", new_callable=StringIO) as stdout:
+                    self.assertEqual(guard.main(), 0)
+        self.assertEqual(json.loads(stdout.getvalue())["decision"], "deny")
+
+    def test_guard_confines_paths_to_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            outside = Path(tmpdir) / "outside.txt"
+            root.mkdir()
+            outside.write_text("secret", encoding="utf-8")
+            self.assertTrue(guard.is_allowed("rg needle .", [["rg"]], str(root))[0])
+            allowed, reason = guard.is_allowed(
+                f'rg needle "{outside}"', [["rg"]], str(root)
+            )
+            self.assertFalse(allowed)
+            self.assertIn("escapes delegated workspace", reason)
+            self.assertFalse(guard.is_allowed("rg needle ..", [["rg"]], str(root))[0])
 
 
 class TestGlobalCli(unittest.TestCase):
@@ -174,7 +207,29 @@ class TestGlobalCli(unittest.TestCase):
                 hooks = json.loads(config_hooks.read_text(encoding="utf-8"))
                 self.assertIn("agent-delegation-command-policy", hooks)
                 self.assertIn("existing-hook", hooks)
+                command = hooks["agent-delegation-command-policy"]["PreToolUse"][0]["hooks"][0]["command"]
+                self.assertIn(str(Path(sys.executable).resolve()), command)
+                self.assertIn("-m agent_delegation.cli guard", command)
+                self.assertNotEqual(command, "agent-delegation guard")
+                backups = list(config_hooks.parent.glob("hooks.json.backup-*"))
+                self.assertEqual(len(backups), 1)
+                self.assertIn("existing-hook", json.loads(backups[0].read_text(encoding="utf-8")))
                 self.assertEqual(old_hooks.read_text(encoding="utf-8"), '{"legacy": true}')
+
+    def test_hook_install_replace_failure_preserves_original(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            hooks = root / "hooks.json"
+            original = '{"existing-hook": {"enabled": true}}'
+            hooks.write_text(original, encoding="utf-8")
+            with mock.patch.dict(
+                os.environ, {"AGENT_DELEGATION_AGY_CONFIG_ROOT": str(root)}, clear=False
+            ):
+                with mock.patch.object(cli.os, "replace", side_effect=OSError("replace failed")):
+                    with self.assertRaises(OSError):
+                        cli._install_agy_hook()
+            self.assertEqual(hooks.read_text(encoding="utf-8"), original)
+            self.assertEqual(list(root.glob("hooks.json.tmp-*")), [])
 
     def test_install_rejects_non_object_agy_hooks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -339,6 +394,22 @@ class TestGlobalCli(unittest.TestCase):
 
 
 class TestBackendSafety(unittest.TestCase):
+    def test_gemini_cli_prompt_is_never_passed_to_a_shell(self):
+        prompt = "inspect & whoami"
+        process = mock.Mock()
+        process.stdout = StringIO("ok\n")
+        process.stderr = StringIO("")
+        process.wait.return_value = 0
+        process.returncode = 0
+        process.pid = 1234
+        with mock.patch.object(runner, "_gemini_cli_argv_prefix", return_value=["node", "gemini.js"]):
+            with mock.patch.object(runner.subprocess, "Popen", return_value=process) as popen:
+                result = runner.run_gemini_cli("model", prompt, 2)
+        self.assertEqual(result.returncode, 0)
+        command = popen.call_args.args[0]
+        self.assertIn(prompt, command)
+        self.assertIs(popen.call_args.kwargs["shell"], False)
+
     def test_failed_attempt_records_model(self):
         args = Namespace(
             no_state=True,

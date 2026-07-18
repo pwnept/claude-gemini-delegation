@@ -185,10 +185,10 @@ Override with `--models` or `GEMINI_API_MODELS`.
 `gemini-3.5-flash` then cascades through four fallbacks including lite models.
 Override with `--models` or `GEMINI_CLI_MODELS`.
 
-On Windows, `gemini-cli` is launched with `--skip-trust` and `--yolo` so it
-runs headless without blocking on interactive prompts. The process tree is killed
-immediately on the first capacity signal to prevent the CLI's internal retry loop
-from wasting extra RPD.
+`gemini-cli` is launched with `--sandbox --approval-mode plan`. On Windows, the
+npm shim is resolved to its Node entry point so task text never passes through
+`cmd.exe`. The process tree is killed immediately on the first capacity signal
+to prevent the CLI's internal retry loop from wasting extra RPD.
 
 To set up either API backend (same key, same `$PROFILE` line):
 
@@ -285,6 +285,10 @@ something, paste that report into an AI agent or remove the listed path manually
 ## Source Checkout Development
 
 From this repository, use the source hooks directly for broad repo analysis:
+
+The agy backend remains fail-closed unless it is launched through the validated
+global policy path. The `gemini-cli` and `gemini-api` backends remain available
+for direct source-checkout use.
 
 ```powershell
 & hooks/delegate_and_log.ps1 "npm ls" "Build analysis" 5

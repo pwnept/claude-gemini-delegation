@@ -325,19 +325,41 @@ def resolve_backend(args: argparse.Namespace) -> str:
     return backend.strip().lower()
 
 
+def _gemini_cli_argv_prefix() -> list[str]:
+    """Resolve gemini-cli without passing untrusted text through cmd.exe."""
+    command = shutil.which("gemini")
+    if not command:
+        raise RuntimeError("gemini-cli is not installed or is not on PATH")
+    path = Path(command)
+    if os.name != "nt" or path.suffix.lower() not in {".cmd", ".bat"}:
+        return [command]
+
+    node = shutil.which("node")
+    candidates = (
+        path.parent / "node_modules" / "@google" / "gemini-cli" / "bundle" / "gemini.js",
+        path.parent / "node_modules" / "@google" / "gemini-cli" / "dist" / "index.js",
+    )
+    script = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if not node or script is None:
+        raise RuntimeError(
+            "Cannot resolve the gemini-cli Node entry point safely. Reinstall @google/gemini-cli."
+        )
+    return [node, str(script)]
+
+
 def run_gemini_cli(model: str, prompt: str, timeout: int) -> subprocess.CompletedProcess:
     """Run gemini-cli non-interactively, killing it immediately on capacity errors.
 
     Streams stderr line-by-line in a background thread. The moment a capacity
     pattern appears (429, 503, quota exhausted) the process tree is killed so
     gemini-cli's own internal retry loop never fires a second API request.
-    On Windows, taskkill /F /T kills the cmd.exe shell + Node.js child together.
+    On Windows, the npm shim is resolved to its Node entry point so prompts are
+    never parsed by cmd.exe. taskkill /F /T still terminates the process tree.
     """
     import threading
 
-    command = shutil.which("gemini") or "gemini"
     cmd = [
-        command,
+        *_gemini_cli_argv_prefix(),
         "--model",
         model,
         "--prompt",
@@ -355,7 +377,7 @@ def run_gemini_cli(model: str, prompt: str, timeout: int) -> subprocess.Complete
         text=True,
         encoding="utf-8",
         errors="replace",
-        shell=(os.name == "nt"),
+        shell=False,
     )
 
     stdout_buf = []
@@ -1159,6 +1181,13 @@ def _main() -> int:
     if backend not in BACKENDS:
         print(
             "Unknown backend {0!r}. Choose one of: {1}".format(backend, ", ".join(BACKENDS)),
+            file=sys.stderr,
+        )
+        return 2
+
+    if backend == "agy" and os.environ.get("AGENT_DELEGATION_AGY_VALIDATED") != "1":
+        print(
+            "agy delegation is disabled until its permission hook passes the reviewed live smoke.",
             file=sys.stderr,
         )
         return 2

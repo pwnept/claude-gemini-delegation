@@ -5,10 +5,10 @@ Validates agy's response quality and logs metrics
 
 Usage:
     python post_delegate.py <response> [max_lines] [task_context]
-    
+
 Example:
     python post_delegate.py "Response text here" 10 "dependency-analysis"
-""" 
+"""
 
 import os
 import sys
@@ -43,45 +43,45 @@ def validate_response(response: str, max_lines: int) -> Tuple[bool, list]:
     warnings = []
     actual_lines = count_lines(response)
     token_estimate = estimate_tokens(response)
-    
+
     # Check if response is within limits
     if actual_lines > max_lines:
         warnings.append(
             f"⚠️  WARNING: Response too long ({actual_lines} lines > {max_lines} expected)"
         )
         warnings.append("   Suggestion: Add stricter compression directive to prompt")
-    
+
     # Check if response is too brief (might be missing context)
     if actual_lines < 3:
         warnings.append(f"⚠️  WARNING: Response very brief ({actual_lines} lines)")
         warnings.append("   Suggestion: Check if agy understood the task")
-    
+
     # Check token efficiency
     if token_estimate > 1000:
         warnings.append(f"⚠️  WARNING: Response uses ~{token_estimate} tokens (>1000)")
         warnings.append("   Suggestion: Refine prompt compression directives")
-    
+
     # Success message if no warnings
     if not warnings:
         print(f"✅ Response quality: {actual_lines} lines, ~{token_estimate} tokens")
         return True, []
-    
+
     return False, warnings
 
 
 def log_metrics(task: str, lines: int, tokens: int, metrics_dir: Path):
     """Log metrics for analysis."""
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     date = datetime.now().strftime("%Y-%m-%d")
     log_file = metrics_dir / f"delegation-{date}.csv"
-    
+
     # Create header if file doesn't exist
     if not log_file.exists():
         with log_file.open('w', encoding="utf-8", newline="") as f:
             f.write("timestamp,task,lines,tokens\n")
-    
+
     # Append metrics
     with log_file.open('a', encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
@@ -98,12 +98,12 @@ def extract_action_items(response: str) -> list:
         r'Recommend(?:ed)?:?\s*(.+)',
         r'Next step:?\s*(.+)',
     ]
-    
+
     action_items = []
     for pattern in patterns:
         matches = re.finditer(pattern, response, re.IGNORECASE | re.MULTILINE)
         action_items.extend([m.group(0) for m in matches])
-    
+
     return action_items
 
 
@@ -111,10 +111,10 @@ def check_daily_usage(metrics_dir: Path) -> int:
     """Check how many delegations were made today."""
     date = datetime.now().strftime("%Y-%m-%d")
     log_file = metrics_dir / f"delegation-{date}.csv"
-    
+
     if not log_file.exists():
         return 0
-    
+
     with log_file.open('r', encoding="utf-8", newline="") as f:
         # Subtract 1 for header row
         return max(0, len(f.readlines()) - 1)
@@ -155,7 +155,7 @@ def main():
         response = sys.argv[1]
         max_lines = int(sys.argv[2]) if len(sys.argv) > 2 else 10
         task_context = sys.argv[3] if len(sys.argv) > 3 else "unknown"
-    
+
     # Determine metrics directory
     # Fast path: --agent-dir passed by delegate_and_log.ps1 (avoids cwd tree-walk)
     if agent_dir_override is not None:
@@ -186,33 +186,33 @@ def main():
             agent_dir = current_dir / ".gemini-delegation"
 
     metrics_dir = resolve_log_dir(caller, agent_dir / "metrics")
-    
+
     # Validate response
     actual_lines = count_lines(response)
     token_estimate = estimate_tokens(response)
-    
+
     is_valid, warnings = validate_response(response, max_lines)
-    
+
     # Print warnings if any
     for warning in warnings:
         print(warning)
-    
+
     # Log metrics
     log_metrics(task_context, actual_lines, token_estimate, metrics_dir)
-    
+
     # Extract and display action items
     action_items = extract_action_items(response)
     if action_items:
         print("\n📋 Action Items Found:")
         for item in action_items:
             print(f"   {item}")
-    
+
     # Check daily usage and suggest analysis
     daily_count = check_daily_usage(metrics_dir)
     if daily_count >= 20:
         print(f"\n💡 TIP: You've made {daily_count} delegations today.")
         print("   Run 'python3 .gemini-delegation/hooks/analyze_metrics.py' to see optimization opportunities")
-    
+
     # Exit with appropriate code
     sys.exit(0 if is_valid else 1)
 
