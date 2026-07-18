@@ -29,10 +29,6 @@ FORBIDDEN_SYNTAX = (
     "%",
     "!",
     ",",
-    "*",
-    "?",
-    "[",
-    "]",
     "\n",
     "\r",
 )
@@ -41,8 +37,6 @@ FORBIDDEN_ARGUMENTS = {
     "--output",
     "--exec",
     "--exec-batch",
-    "-x",
-    "-X",
     "--pre",
     "--ext-diff",
     "--textconv",
@@ -50,7 +44,6 @@ FORBIDDEN_ARGUMENTS = {
     "--paginate",
     "--show-signature",
     "--follow",
-    "-l",
     "-followsymlink",
     "--follow-symlink",
 }
@@ -97,12 +90,129 @@ def _path_argument(token: str) -> str:
     return token
 
 
+_RG_VALUE_OPTIONS = {
+    "-A", "-B", "-C", "-e", "-f", "-g", "-m", "-t", "-T",
+    "--after-context", "--before-context", "--context", "--encoding",
+    "--engine", "--file", "--glob", "--max-columns", "--max-count",
+    "--max-depth", "--max-filesize", "--path-separator", "--pre-glob",
+    "--regexp", "--replace", "--sort", "--sortr", "--threads",
+    "--type", "--type-add", "--type-not",
+}
+
+
+def _rg_path_operands(tokens: list[str]) -> list[str]:
+    paths = []
+    explicit_pattern = False
+    pattern_seen = False
+    files_mode = False
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        name = token.split("=", 1)[0].split(":", 1)[0]
+        if token == "--":
+            remaining = tokens[index + 1:]
+            if not explicit_pattern and not files_mode and not pattern_seen and remaining:
+                pattern_seen = True
+                remaining = remaining[1:]
+            paths.extend(remaining)
+            break
+        if token.startswith("-"):
+            attached_short_value = (
+                len(token) > 2 and token[:2] in {"-A", "-B", "-C", "-e", "-f", "-g", "-m", "-t", "-T"}
+            )
+            if name in {"-e", "--regexp", "-f", "--file"} or (
+                len(token) > 2 and token[:2] in {"-e", "-f"}
+            ):
+                explicit_pattern = True
+            if name == "--files":
+                files_mode = True
+            if name in _RG_VALUE_OPTIONS and "=" not in token and not attached_short_value:
+                index += 2
+                continue
+            index += 1
+            continue
+        if files_mode or explicit_pattern or pattern_seen:
+            paths.append(token)
+        else:
+            pattern_seen = True
+        index += 1
+    return paths
+
+
+_FD_PATH_OPTIONS = {"--base-directory", "--search-path"}
+_FD_VALUE_OPTIONS = {
+    "-d", "-e", "-E", "-j", "-t",
+    "--and", "--batch-size", "--changed-before", "--changed-within",
+    "--color", "--exclude", "--extension", "--format", "--max-depth",
+    "--max-results", "--min-depth", "--owner", "--path-separator",
+    "--size", "--type", "--threads",
+}
+
+
+def _fd_path_operands(tokens: list[str]) -> list[str]:
+    paths = []
+    pattern_seen = False
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        name = token.split("=", 1)[0]
+        if token == "--":
+            remaining = tokens[index + 1:]
+            if not pattern_seen and remaining:
+                pattern_seen = True
+                remaining = remaining[1:]
+            paths.extend(remaining)
+            break
+        if token.startswith("-"):
+            if name in _FD_PATH_OPTIONS:
+                if "=" in token:
+                    paths.append(token.split("=", 1)[1])
+                elif index + 1 < len(tokens):
+                    paths.append(tokens[index + 1])
+                    index += 1
+            elif name in _FD_VALUE_OPTIONS and "=" not in token:
+                index += 1
+            index += 1
+            continue
+        if pattern_seen:
+            paths.append(token)
+        else:
+            pattern_seen = True
+        index += 1
+    return paths
+
+
+def _path_operands(tokens: list[str]) -> list[str]:
+    command = tokens[0].lower()
+    if command == "rg":
+        return _rg_path_operands(tokens)
+    if command == "fd":
+        return _fd_path_operands(tokens)
+    if command == "select-string":
+        positionals = [token for token in tokens[1:] if not token.startswith("-")]
+        return positionals[1:] if positionals else []
+    return tokens[1:]
+
+
+def _cluster_denial(command: str, token: str) -> str | None:
+    if not token.startswith("-") or token.startswith("--") or len(token) < 2:
+        return None
+    cluster = token[1:]
+    if command in {"rg", "fd"} and "L" in cluster:
+        return "follow-symlink short option is denied"
+    if command == "fd" and any(flag in cluster for flag in ("x", "X")):
+        return "fd execution short option is denied"
+    return None
+
+
 def _outside_workspace(tokens: list[str], workspace: str) -> str | None:
     root = Path(workspace).resolve()
-    for token in tokens[1:]:
+    for token in _path_operands(tokens):
         candidate = _path_argument(token).strip().strip("\"'")
         if not candidate or candidate.startswith("-"):
             continue
+        if any(character in candidate for character in "*?[]"):
+            return candidate
         lowered = candidate.lower()
         if lowered.startswith(("~", "\\\\", "//")):
             return candidate
@@ -140,14 +250,18 @@ def is_allowed(
     if tokens[0].lower() in denied:
         return False, f"{tokens[0]} is permanently denied"
     lowered = [token.lower() for token in tokens]
+    command = tokens[0].lower()
     denied_prefixes = [
         [str(token).lower() for token in item]
         for item in DEFAULT_POLICY["permanent_denied_prefixes"]
     ]
     if any(lowered[: len(prefix)] == prefix for prefix in denied_prefixes):
         return False, "command is permanently denied"
-    for token in lowered[1:]:
-        name = token.split("=", 1)[0]
+    for raw_token, token in zip(tokens[1:], lowered[1:]):
+        cluster_reason = _cluster_denial(command, raw_token)
+        if cluster_reason:
+            return False, cluster_reason
+        name = token.split("=", 1)[0].split(":", 1)[0]
         if name in FORBIDDEN_ARGUMENTS:
             return False, f"argument {name} is denied"
     if workspace:

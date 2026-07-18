@@ -189,12 +189,30 @@ class TestCommandGuard(unittest.TestCase):
         for command in (
             "rg --follow needle .",
             "rg -L needle .",
+            "rg -Luu needle .",
             "Get-ChildItem -FollowSymlink .",
+            "Get-ChildItem -FollowSymlink:$true .",
             "Get-Content *\\secret.txt",
+            "rg needle src/*",
+            "rg -efoo src/*",
+            "fd pattern -xRemove-Item src",
+            "fd --base-directory .. pattern",
+            "fd --search-path=.. pattern",
         ):
             with self.subTest(command=command):
                 prefix = [[command.split()[0]]]
                 self.assertFalse(guard.is_allowed(command, prefix, workspace)[0])
+
+    def test_guard_allows_regex_wildcards_but_not_path_wildcards(self):
+        workspace = str(Path.cwd())
+        for command in (
+            'rg "foo.*bar" src',
+            'rg "what?" src',
+            'rg "[A-Z]" src',
+            'rg -e "foo.*bar" src',
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(guard.is_allowed(command, [["rg"]], workspace)[0])
 
     def test_guard_resolves_real_symlink_before_allowing_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
