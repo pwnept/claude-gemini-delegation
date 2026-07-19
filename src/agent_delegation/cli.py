@@ -29,6 +29,7 @@ CALLER_ENV = "AGENT_DELEGATION_CALLER"
 ALLOW_ENV = "AGENT_DELEGATION_ALLOWED_PREFIXES"
 WORKSPACE_ENV = "AGENT_DELEGATION_WORKSPACE"
 RUN_DIR_ENV = "AGENT_DELEGATION_RUN_DIR"
+AGY_CONFIG_ENV = "AGENT_DELEGATION_AGY_CONFIG_ROOT"
 
 
 class CliError(RuntimeError):
@@ -122,10 +123,10 @@ def _agy_root() -> Path:
 
 
 def _agy_config_root() -> Path:
-    configured = os.environ.get("AGENT_DELEGATION_AGY_CONFIG_ROOT")
+    configured = os.environ.get(AGY_CONFIG_ENV)
     if configured:
         return Path(os.path.expandvars(os.path.expanduser(configured))).resolve()
-    return Path.home() / ".gemini" / "config"
+    return global_home() / "agy-config"
 
 
 def _guard_argv() -> list[str]:
@@ -179,6 +180,55 @@ def _install_agy_hook() -> Path:
             )
             suffix += 1
         shutil.copy2(path, backup)
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return path
+
+
+def _install_agy_settings() -> Path:
+    """Create settings used only by delegated agy processes.
+
+    Print mode cannot answer permission prompts. The broad command grant only
+    admits calls to the PreToolUse stage. The colocated command guard remains
+    authoritative and allows commands from the active delegated capability set.
+    """
+    root = _agy_config_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "config.json"
+    document = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise CliError(f"Cannot update agy config file {path}: top level must be an object")
+            document = loaded
+        except ValueError as exc:
+            raise CliError(f"Cannot update invalid agy config file {path}: {exc}") from exc
+    user_settings = document.setdefault("userSettings", {})
+    if not isinstance(user_settings, dict):
+        raise CliError(f"Cannot update agy config file {path}: userSettings must be an object")
+    permissions = user_settings.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        raise CliError(f"Cannot update agy config file {path}: permissions must be an object")
+    allowed = permissions.setdefault("allow", [])
+    if not isinstance(allowed, list):
+        raise CliError(f"Cannot update agy config file {path}: permissions.allow must be an array")
+    if "command(*)" not in allowed:
+        allowed.append("command(*)")
+    delegation_settings = document.setdefault("agentDelegation", {})
+    if not isinstance(delegation_settings, dict):
+        raise CliError(f"Cannot update agy config file {path}: agentDelegation must be an object")
+    delegation_settings["schema"] = 1
+    delegation_settings["guardCommand"] = subprocess.list2cmdline(_guard_argv())
+    content = json.dumps(document, indent=2) + "\n"
+    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
             handle.write(content)
@@ -342,6 +392,7 @@ def run_command(args: argparse.Namespace) -> int:
         ALLOW_ENV: json.dumps(prefixes),
         WORKSPACE_ENV: str(workspace),
         RUN_DIR_ENV: str(run_dir),
+        AGY_CONFIG_ENV: str(_agy_config_root()),
         "AGENT_DELEGATION_AGY_VALIDATED": "1" if args.backend == "agy" else "0",
         "DELEGATION_LOG_ROOT": str(global_home()),
     }
@@ -439,6 +490,7 @@ def manager_command(args: argparse.Namespace) -> int:
             CALLER_ENV: caller,
             ALLOW_ENV: json.dumps(prefixes),
             WORKSPACE_ENV: str(workspace),
+            AGY_CONFIG_ENV: str(_agy_config_root()),
             "AGENT_DELEGATION_AGY_VALIDATED": "1",
             "DELEGATION_LOG_ROOT": str(global_home()),
         }
@@ -482,8 +534,10 @@ def manager_command(args: argparse.Namespace) -> int:
 def install_command(args: argparse.Namespace) -> int:
     home = ensure_global_home(force=args.force)
     agy_hook = _install_agy_hook()
+    agy_settings = _install_agy_settings()
     print(f"Installed global configuration at {home}")
     print(f"Installed agy command guard in {agy_hook}")
+    print(f"Installed delegated agy settings in {agy_settings}")
     return 0
 
 

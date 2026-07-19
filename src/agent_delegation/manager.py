@@ -671,8 +671,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     command = gemini_delegate.resolve_agy_command()
     # Interactive session: spawn INSIDE the workspace so agy enters interactive
     # mode (the one-shot runner deliberately avoids this; here it is the point).
-    cmdline = subprocess.list2cmdline(
-        [
+    agy_args = gemini_delegate.managed_agy_config_args() + [
             "--add-dir",
             workspace,
             "--model",
@@ -681,7 +680,7 @@ def cmd_host(args: argparse.Namespace) -> int:
             "plan",
             "--sandbox",
         ]
-    )
+    cmdline = subprocess.list2cmdline(agy_args)
     pty = winpty.PTY(220, 50)
     pty.spawn(command, cmdline=cmdline, cwd=workspace)
 

@@ -606,7 +606,7 @@ def cmd_host(args: argparse.Namespace) -> int:
     # Interactive session: spawn INSIDE the workspace so agy enters interactive
     # mode (the one-shot runner deliberately avoids this; here it is the point).
     cmdline = subprocess.list2cmdline(
-        [
+        gemini_delegate.managed_agy_config_args() + [
             "--add-dir",
             workspace,
             "--model",

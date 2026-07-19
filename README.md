@@ -32,7 +32,10 @@ agent-delegation status
 
 The managed home is `~/.agent-delegation/`. User extensions belong in
 `~/.agent-delegation/policy.local.json`; setup refreshes `policy.json` without
-overwriting the local file.
+overwriting the local file. This global managed installation is the default.
+The delegated agy configuration is isolated under
+`~/.agent-delegation/agy-config/`, so its headless permission setup does not
+weaken normal agy sessions.
 
 The agy print backend remains disabled until its permission hook passes a
 reviewed live smoke that allows `rg` and denies `Get-Date`. `gemini-cli` and
@@ -85,12 +88,13 @@ Native JSONL is copied byte for byte and hash-verified after the child exits.
 The original remains in agy's native store. The manifest records caller,
 workspace, backend, capability additions, exit code, and hashes.
 
-## Legacy local installations
+## Optional project-local customization
 
-The old `gemini-delegate` command and per-repository installer remain only as
-temporary compatibility interfaces. New setup does not create `.gemini-delegation`
-or repository hook copies. Remove old local installs separately after verifying
-the global tool.
+The old `gemini-delegate` command and per-repository installer remain as
+compatibility interfaces. New setup uses the global managed installation and
+does not create `.gemini-delegation` or repository hook copies. A future
+project-local workflow may be used explicitly when a repository genuinely
+needs custom delegation behavior.
 
 ## Legacy per-repository compatibility
 
@@ -249,8 +253,8 @@ directly and must not recursively invoke `agy`.
 Use local target installs by default. They are more portable and easier for an
 AI agent to audit because every managed file lives in the target repo.
 
-Global setup is not the default and the installer does not mutate a global
-project registry. If you find an old `~/.gemini-delegation-registry.json`,
+Project-local setup is not the default and the installer does not mutate a
+global project registry. If you find an old `~/.gemini-delegation-registry.json`,
 see `docs/legacy-uninstall-notes.md`.
 
 ## Error Handling Philosophy

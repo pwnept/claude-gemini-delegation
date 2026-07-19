@@ -97,6 +97,7 @@ LITE_MODELS = {"gemini-3.1-flash-lite", "gemini-2.5-flash-lite"}
 # one run_<backend>() + run_<backend>_backend() pair, one branch in main(),
 # and a new entry in this tuple.
 BACKENDS = ("agy", "gemini-cli", "gemini-api")
+AGY_CONFIG_ENV = "AGENT_DELEGATION_AGY_CONFIG_ROOT"
 LAST_MODEL_USED: str | None = None
 
 # Caller detection and log-dir routing live in delegation_caller.py (shared
@@ -320,6 +321,49 @@ def resolve_agy_command() -> str:
     if os.name == "nt":
         return shutil.which("agy.exe") or shutil.which("agy") or "agy.exe"
     return shutil.which("agy") or "agy"
+
+
+def managed_agy_config_args() -> list[str]:
+    """Return the isolated agy config arguments or fail before launch."""
+    raw = os.environ.get(AGY_CONFIG_ENV, "").strip()
+    if not raw:
+        raise RuntimeError(f"{AGY_CONFIG_ENV} is required for delegated agy launches")
+    root = Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+    hooks_path = root / "hooks.json"
+    config_path = root / "config.json"
+    try:
+        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        hook = hooks["agent-delegation-command-policy"]
+        allowed = config["userSettings"]["permissions"]["allow"]
+        expected_command = config["agentDelegation"]["guardCommand"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"Delegated agy config is incomplete at {root}: {exc}") from exc
+    if not isinstance(hook, dict) or hook.get("enabled") is not True:
+        raise RuntimeError(f"Delegated agy command guard is not enabled in {hooks_path}")
+    try:
+        if not isinstance(expected_command, str) or not expected_command:
+            raise TypeError("guardCommand must be a nonempty string")
+        groups = hook["PreToolUse"]
+        valid_guard = any(
+            isinstance(group, dict)
+            and group.get("matcher") == "run_command"
+            and any(
+                isinstance(handler, dict)
+                and handler.get("type") == "command"
+                and handler.get("command") == expected_command
+                and handler.get("timeout") == 5
+                for handler in group.get("hooks", [])
+            )
+            for group in groups
+        )
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(f"Delegated agy command guard is incomplete in {hooks_path}") from exc
+    if not valid_guard:
+        raise RuntimeError(f"Delegated agy command guard does not match the trusted runtime in {hooks_path}")
+    if not isinstance(allowed, list) or "command(*)" not in allowed:
+        raise RuntimeError(f"Delegated agy headless permission is missing in {config_path}")
+    return ["--config-dir", str(root)]
 
 
 def resolve_backend(args: argparse.Namespace) -> str:
@@ -623,7 +667,7 @@ def run_agy(
     import tempfile
     neutral_cwd = tempfile.gettempdir()
     workspace_dir = str(Path.cwd().resolve())
-    agy_args = [
+    agy_args = managed_agy_config_args() + [
         "--add-dir",
         workspace_dir,
         "--model",

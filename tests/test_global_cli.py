@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from argparse import Namespace
 from io import StringIO
@@ -13,6 +14,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agent_delegation import cli, guard, policy, runner  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+import gemini_delegate  # noqa: E402
 
 
 class TestGlobalPolicy(unittest.TestCase):
@@ -435,6 +439,17 @@ class TestGlobalCli(unittest.TestCase):
                 self.assertEqual(len(backups), 1)
                 self.assertIn("existing-hook", json.loads(backups[0].read_text(encoding="utf-8")))
                 self.assertEqual(old_hooks.read_text(encoding="utf-8"), '{"legacy": true}')
+                settings = json.loads(
+                    (Path(agy_config_root) / "config.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    settings["userSettings"]["permissions"]["allow"], ["command(*)"]
+                )
+
+    def test_default_agy_config_is_isolated_under_global_home(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": tmpdir}, clear=True):
+                self.assertEqual(cli._agy_config_root(), Path(tmpdir) / "agy-config")
 
     def test_hook_install_replace_failure_preserves_original(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -614,6 +629,102 @@ class TestGlobalCli(unittest.TestCase):
 
 
 class TestBackendSafety(unittest.TestCase):
+    @staticmethod
+    def _write_agy_config(root: Path) -> None:
+        root.mkdir(parents=True)
+        guard_command = subprocess.list2cmdline(cli._guard_argv())
+        (root / "hooks.json").write_text(
+            json.dumps(
+                {
+                    "agent-delegation-command-policy": {
+                        "enabled": True,
+                        "PreToolUse": [
+                            {
+                                "matcher": "run_command",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": guard_command,
+                                        "timeout": 5,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / "config.json").write_text(
+            json.dumps(
+                {
+                    "userSettings": {"permissions": {"allow": ["command(*)"]}},
+                    "agentDelegation": {"schema": 1, "guardCommand": guard_command},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_agy_launch_fails_before_process_without_managed_config(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(runner.subprocess, "run") as launch:
+                with self.assertRaisesRegex(RuntimeError, "AGENT_DELEGATION_AGY_CONFIG_ROOT"):
+                    runner.run_agy("agy", "model", "prompt", 10)
+        launch.assert_not_called()
+
+    def test_agy_launch_uses_managed_config_argument(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "agy-config"
+            self._write_agy_config(root)
+            env = {runner.AGY_CONFIG_ENV: str(root)}
+            result = mock.Mock(returncode=0, stdout="ok", stderr="")
+            fake_os = types.SimpleNamespace(name="posix", environ=os.environ, path=os.path)
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(runner, "os", fake_os):
+                    with mock.patch.object(runner.subprocess, "run", return_value=result) as launch:
+                        self.assertIs(runner.run_agy("agy", "model", "prompt", 10), result)
+            argv = launch.call_args.args[0]
+            self.assertEqual(argv[1:3], ["--config-dir", str(root.resolve())])
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                self.assertEqual(
+                    gemini_delegate.managed_agy_config_args(),
+                    ["--config-dir", str(root.resolve())],
+                )
+
+    def test_agy_launch_rejects_missing_or_wrong_guard_handler(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "agy-config"
+            self._write_agy_config(root)
+            hooks_path = root / "hooks.json"
+            unsafe_hooks = [
+                {"agent-delegation-command-policy": {"enabled": True}},
+                {
+                    "agent-delegation-command-policy": {
+                        "enabled": True,
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "wrong guard",
+                                        "timeout": 5,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                },
+            ]
+            for document in unsafe_hooks:
+                hooks_path.write_text(json.dumps(document), encoding="utf-8")
+                with mock.patch.dict(
+                    os.environ, {runner.AGY_CONFIG_ENV: str(root)}, clear=False
+                ):
+                    with self.assertRaises(RuntimeError):
+                        runner.managed_agy_config_args()
+
     def test_gemini_cli_prompt_is_never_passed_to_a_shell(self):
         prompt = "inspect & whoami"
         process = mock.Mock()
