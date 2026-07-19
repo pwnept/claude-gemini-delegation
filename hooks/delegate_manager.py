@@ -613,7 +613,6 @@ def cmd_host(args: argparse.Namespace) -> int:
             record.get("model") or "",
             "--mode",
             "plan",
-            "--sandbox",
         ]
     )
     pty = winpty.PTY(220, 50)

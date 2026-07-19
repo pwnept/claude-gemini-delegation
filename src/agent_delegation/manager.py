@@ -678,7 +678,6 @@ def cmd_host(args: argparse.Namespace) -> int:
             record.get("model") or "",
             "--mode",
             "plan",
-            "--sandbox",
         ]
     cmdline = subprocess.list2cmdline(agy_args)
     pty = winpty.PTY(220, 50)

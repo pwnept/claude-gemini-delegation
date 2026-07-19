@@ -136,9 +136,10 @@ class TestPersistentManagerSafety(unittest.TestCase):
                 self.assertEqual(manager._spawn_detached(["worker"], log_path), 1234)
         self.assertEqual(popen.call_args.kwargs["env"][cli.DEPTH_ENV], "1")
 
-    def test_persistent_host_uses_sandboxed_plan_mode(self):
+    def test_persistent_host_uses_guarded_plan_mode(self):
         source = Path(manager.__file__).read_text(encoding="utf-8")
-        self.assertIn('"--mode",\n            "plan",\n            "--sandbox"', source)
+        self.assertIn('"--mode",\n            "plan"', source)
+        self.assertNotIn('"--mode",\n            "plan",\n            "--sandbox"', source)
         self.assertNotIn("dangerously-skip-permissions", source)
         self.assertNotIn('"--yolo"', source)
 

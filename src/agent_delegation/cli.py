@@ -294,7 +294,7 @@ def _build_prompt(task: str, context: str, workspace: Path, prefixes: list[list[
         [
             "You are a bounded delegate working for another agent.",
             "Do not invoke agent-delegation or start another delegate.",
-            "Work only inside the supplied workspace and obey the active sandbox.",
+            "Work only inside the supplied workspace and obey all active security controls.",
             "Terminal commands are denied unless their token prefix is listed below.",
             "Allowed command prefixes:",
             *[f"- {item}" for item in rendered],

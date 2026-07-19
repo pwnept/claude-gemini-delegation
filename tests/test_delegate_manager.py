@@ -62,9 +62,10 @@ class TestAsyncOneshot(DelegateManagerCase):
                 self.assertEqual(delegate_manager.main(["async", "task"]), 2)
         spawn.assert_not_called()
 
-    def test_legacy_persistent_host_uses_sandboxed_plan_mode(self):
+    def test_legacy_persistent_host_uses_guarded_plan_mode(self):
         source = Path(delegate_manager.__file__).read_text(encoding="utf-8")
-        self.assertIn('"--mode",\n            "plan",\n            "--sandbox"', source)
+        self.assertIn('"--mode",\n            "plan"', source)
+        self.assertNotIn('"--mode",\n            "plan",\n            "--sandbox"', source)
 
     def test_legacy_child_activates_managed_command_policy(self):
         workspace = str(Path(self._tmp.name) / "repo")

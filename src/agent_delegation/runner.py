@@ -684,10 +684,11 @@ def run_agy(
         model,
         "--mode",
         "plan",
-        "--sandbox",
         "-p",
         prompt,
     ]
+    if os.name != "nt":
+        agy_args.insert(-2, "--sandbox")
 
     if os.name != "nt":
         return subprocess.run(

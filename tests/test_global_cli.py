@@ -776,6 +776,7 @@ class TestBackendSafety(unittest.TestCase):
                                 self.assertIs(runner.run_agy("agy", "model", "prompt", 10), result)
             argv = launch.call_args.args[0]
             self.assertNotIn("--config-dir", argv)
+            self.assertIn("--sandbox", argv)
 
             with mock.patch.dict(os.environ, env, clear=False):
                 with mock.patch.object(
@@ -864,11 +865,12 @@ class TestBackendSafety(unittest.TestCase):
         self.assertEqual(runner.run_with_fallback(["model-b"], Path("unused"), args, attempt), 7)
         self.assertEqual(runner.LAST_MODEL_USED, "model-b")
 
-    def test_runner_contains_sandbox_and_no_bypass_flags(self):
+    def test_runner_uses_platform_sandbox_without_bypass_flags(self):
         source = (Path(__file__).resolve().parents[1] / "src" / "agent_delegation" / "runner.py").read_text(
             encoding="utf-8"
         )
         self.assertIn('"--sandbox"', source)
+        self.assertIn('if os.name != "nt"', source)
         forbidden = "--" + "yolo"
         skip = "--" + "skip-trust"
         self.assertNotIn(forbidden, source)

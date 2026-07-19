@@ -13,7 +13,10 @@ read-heavy file work).
 
 - One delegation level. Every worker receives `AGENT_DELEGATION_DEPTH=1`, and
   another delegation attempt is rejected.
-- agy runs with `--sandbox --mode plan`.
+- agy runs in plan mode behind the managed command and workspace guard.
+  Non-Windows launches also use `--sandbox`; agy 1.1.4's Windows sandbox cannot
+  grant a workspace without attempting the drive root, so Windows relies on the
+  stricter hook instead.
 - Gemini CLI runs with `--sandbox --approval-mode plan`.
 - Permission bypass options are never used.
 - Terminal commands are denied unless their token prefix is present in the
@@ -60,7 +63,7 @@ redirection, pipelines, compound commands, delegation commands, and destructive
 file commands remain permanently denied.
 
 `async` starts a detached one-shot job. `spawn` starts a persistent, single-writer
-agy session with sandboxed plan mode, bounded lifetime, append-only PTY logging,
+agy session with guarded plan mode, bounded lifetime, append-only PTY logging,
 and marker-delimited responses. Both retain native transcript copies and a
 manifest under `~/.agent-delegation/` when they finish.
 
