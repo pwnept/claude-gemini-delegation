@@ -324,6 +324,10 @@ def _actual_agy_config_root() -> Path:
     return (Path.home() / ".gemini" / "config").resolve()
 
 
+def _actual_agy_settings_path() -> Path:
+    return (Path.home() / ".gemini" / "antigravity-cli" / "settings.json").resolve()
+
+
 def managed_agy_config_args() -> list[str]:
     """Validate the managed global agy command gate before launch."""
     raw = os.environ.get(AGY_CONFIG_ENV, "").strip()
@@ -333,13 +337,13 @@ def managed_agy_config_args() -> list[str]:
         if requested != root:
             raise RuntimeError(f"{AGY_CONFIG_ENV} cannot override agy's actual config root: {root}")
     hooks_path = root / "hooks.json"
-    config_path = root / "config.json"
+    settings_path = _actual_agy_settings_path()
     try:
         hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
         hook = hooks["agent-delegation-command-policy"]
-        allowed = config["permissions"]["allow"]
-        expected_command = config["agentDelegation"]["guardCommand"]
+        allowed = settings["permissions"]["allow"]
+        expected_command = settings["agentDelegation"]["guardCommand"]
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise RuntimeError(f"Delegated agy config is incomplete at {root}: {exc}") from exc
     if not isinstance(hook, dict) or hook.get("enabled") is not True:
@@ -365,7 +369,7 @@ def managed_agy_config_args() -> list[str]:
     if not valid_guard:
         raise RuntimeError(f"Delegated agy command guard does not match the trusted runtime in {hooks_path}")
     if not isinstance(allowed, list) or "command(*)" not in allowed:
-        raise RuntimeError(f"Delegated agy headless permission is missing in {config_path}")
+        raise RuntimeError(f"Delegated agy headless permission is missing in {settings_path}")
     return []
 
 

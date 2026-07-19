@@ -134,14 +134,14 @@ def _agy_config_root() -> Path:
     return actual
 
 
+def _agy_cli_settings_path() -> Path:
+    return (Path.home() / ".gemini" / "antigravity-cli" / "settings.json").resolve()
+
+
 def _guard_argv() -> list[str]:
     """Build an isolated guard command pinned to this trusted package tree."""
-    package_root = Path(__file__).resolve().parent.parent
-    bootstrap = (
-        f"import sys;sys.path.insert(0,{str(package_root)!r});"
-        "from agent_delegation.guard import main;raise SystemExit(main())"
-    )
-    return [str(Path(sys.executable).resolve()), "-I", "-c", bootstrap]
+    entry = Path(__file__).resolve().with_name("guard_entry.py")
+    return [str(Path(sys.executable).resolve()), "-I", str(entry)]
 
 
 def _install_agy_hook() -> Path:
@@ -204,9 +204,8 @@ def _install_agy_settings() -> Path:
     calls to PreToolUse, where the guard allows bounded delegation commands and
     forces interactive confirmation for normal agy sessions.
     """
-    root = _agy_config_root()
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / "config.json"
+    path = _agy_cli_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     document = {}
     if path.exists():
         try:
@@ -216,15 +215,6 @@ def _install_agy_settings() -> Path:
             document = loaded
         except ValueError as exc:
             raise CliError(f"Cannot update invalid agy config file {path}: {exc}") from exc
-    user_settings = document.get("userSettings")
-    if isinstance(user_settings, dict):
-        stale_permissions = user_settings.get("permissions")
-        if isinstance(stale_permissions, dict):
-            stale_allowed = stale_permissions.get("allow")
-            if isinstance(stale_allowed, list) and "command(*)" in stale_allowed:
-                stale_permissions["allow"] = [
-                    item for item in stale_allowed if item != "command(*)"
-                ]
     permissions = document.setdefault("permissions", {})
     if not isinstance(permissions, dict):
         raise CliError(f"Cannot update agy config file {path}: permissions must be an object")

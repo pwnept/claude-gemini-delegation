@@ -336,23 +336,60 @@ def main() -> int:
         depth = int(os.environ.get(DEPTH_ENV, "0") or "0")
     except ValueError:
         depth = 0
-    if depth != 1:
-        print(
-            json.dumps(
-                {
-                    "decision": "force_ask",
-                    "reason": "normal agy session requires interactive command confirmation",
-                }
-            )
-        )
-        return 0
     try:
         payload = json.loads(sys.stdin.read() or "{}")
-        prefixes = json.loads(os.environ.get(ALLOW_ENV, "[]"))
     except ValueError:
         print(json.dumps({"decision": "deny", "reason": "agent-delegation guard received malformed input"}))
         return 0
     command = _command_from_payload(payload)
+    if depth != 1:
+        workspace_paths = payload.get("workspacePaths")
+        workspace = (
+            str(workspace_paths[0])
+            if (
+                isinstance(workspace_paths, list)
+                and workspace_paths
+                and isinstance(workspace_paths[0], str)
+                and workspace_paths[0].strip()
+            )
+            else None
+        )
+        if workspace is None:
+            print(
+                json.dumps(
+                    {
+                        "decision": "force_ask",
+                        "reason": "normal agy command requires confirmation: workspace is missing",
+                    }
+                )
+            )
+            return 0
+        allowed, reason = is_allowed(command, DEFAULT_POLICY["command_prefixes"], workspace)
+        if allowed:
+            print(
+                json.dumps(
+                    {
+                        "decision": "allow",
+                        "reason": f"normal agy read-only policy: {reason}",
+                        "permissionOverrides": [f"command({command})"],
+                    }
+                )
+            )
+        else:
+            print(
+                json.dumps(
+                    {
+                        "decision": "force_ask",
+                        "reason": f"normal agy command requires confirmation: {reason}",
+                    }
+                )
+            )
+        return 0
+    try:
+        prefixes = json.loads(os.environ.get(ALLOW_ENV, "[]"))
+    except ValueError:
+        print(json.dumps({"decision": "deny", "reason": "agent-delegation guard received malformed capabilities"}))
+        return 0
     workspace = os.environ.get(WORKSPACE_ENV)
     if not workspace:
         allowed, reason = False, "delegated workspace is missing"
