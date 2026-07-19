@@ -341,7 +341,7 @@ def managed_agy_config_args() -> list[str]:
         hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
         config = json.loads(config_path.read_text(encoding="utf-8"))
         hook = hooks["agent-delegation-command-policy"]
-        allowed = config["userSettings"]["permissions"]["allow"]
+        allowed = config["permissions"]["allow"]
         expected_command = config["agentDelegation"]["guardCommand"]
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise RuntimeError(f"Delegated agy config is incomplete at {root}: {exc}") from exc

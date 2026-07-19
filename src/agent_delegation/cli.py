@@ -216,10 +216,16 @@ def _install_agy_settings() -> Path:
             document = loaded
         except ValueError as exc:
             raise CliError(f"Cannot update invalid agy config file {path}: {exc}") from exc
-    user_settings = document.setdefault("userSettings", {})
-    if not isinstance(user_settings, dict):
-        raise CliError(f"Cannot update agy config file {path}: userSettings must be an object")
-    permissions = user_settings.setdefault("permissions", {})
+    user_settings = document.get("userSettings")
+    if isinstance(user_settings, dict):
+        stale_permissions = user_settings.get("permissions")
+        if isinstance(stale_permissions, dict):
+            stale_allowed = stale_permissions.get("allow")
+            if isinstance(stale_allowed, list) and "command(*)" in stale_allowed:
+                stale_permissions["allow"] = [
+                    item for item in stale_allowed if item != "command(*)"
+                ]
+    permissions = document.setdefault("permissions", {})
     if not isinstance(permissions, dict):
         raise CliError(f"Cannot update agy config file {path}: permissions must be an object")
     allowed = permissions.setdefault("allow", [])

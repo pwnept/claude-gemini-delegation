@@ -446,7 +446,7 @@ class TestGlobalCli(unittest.TestCase):
                     (Path(agy_config_root) / "config.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(
-                    settings["userSettings"]["permissions"]["allow"], ["command(*)"]
+                    settings["permissions"]["allow"], ["command(*)"]
                 )
 
     def test_default_agy_config_uses_global_customization_root(self):
@@ -664,7 +664,7 @@ class TestBackendSafety(unittest.TestCase):
         (root / "config.json").write_text(
             json.dumps(
                 {
-                    "userSettings": {"permissions": {"allow": ["command(*)"]}},
+                    "permissions": {"allow": ["command(*)"]},
                     "agentDelegation": {"schema": 1, "guardCommand": guard_command},
                 }
             ),
