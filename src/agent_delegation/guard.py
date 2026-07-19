@@ -337,7 +337,14 @@ def main() -> int:
     except ValueError:
         depth = 0
     if depth != 1:
-        print("{}")
+        print(
+            json.dumps(
+                {
+                    "decision": "force_ask",
+                    "reason": "normal agy session requires interactive command confirmation",
+                }
+            )
+        )
         return 0
     try:
         payload = json.loads(sys.stdin.read() or "{}")

@@ -165,9 +165,11 @@ class TestCommandGuard(unittest.TestCase):
             guard.is_allowed("git grep --open-files-in-pager=calc needle", [["git", "grep"]])[0]
         )
 
-    def test_guard_is_inactive_for_main_caller(self):
+    def test_guard_forces_confirmation_for_normal_agy(self):
         with mock.patch.dict(os.environ, {cli.DEPTH_ENV: "0"}, clear=True):
-            self.assertEqual(guard.main(), 0)
+            with mock.patch("sys.stdout", new_callable=StringIO) as stdout:
+                self.assertEqual(guard.main(), 0)
+        self.assertEqual(json.loads(stdout.getvalue())["decision"], "force_ask")
 
     def test_guard_blocks_depth_one_unlisted_command(self):
         payload = json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "git commit -m test"}}})
@@ -424,7 +426,8 @@ class TestGlobalCli(unittest.TestCase):
             old_hooks.parent.mkdir(parents=True)
             old_hooks.write_text('{"legacy": true}', encoding="utf-8")
             with mock.patch.dict(os.environ, env, clear=True):
-                self.assertEqual(cli.main(["install", "--force"]), 0)
+                with mock.patch.object(cli, "_agy_config_root", return_value=Path(agy_config_root)):
+                    self.assertEqual(cli.main(["install", "--force"]), 0)
                 self.assertTrue((Path(tmpdir) / "policy.json").is_file())
                 self.assertTrue((Path(tmpdir) / "policy.local.json").is_file())
                 hooks = json.loads(config_hooks.read_text(encoding="utf-8"))
@@ -446,10 +449,11 @@ class TestGlobalCli(unittest.TestCase):
                     settings["userSettings"]["permissions"]["allow"], ["command(*)"]
                 )
 
-    def test_default_agy_config_is_isolated_under_global_home(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch.dict(os.environ, {"AGENT_DELEGATION_HOME": tmpdir}, clear=True):
-                self.assertEqual(cli._agy_config_root(), Path(tmpdir) / "agy-config")
+    def test_default_agy_config_uses_global_customization_root(self):
+        with mock.patch.dict(
+            os.environ, {cli.AGY_CONFIG_ENV: ""}, clear=False
+        ):
+            self.assertEqual(cli._agy_config_root(), Path.home() / ".gemini" / "config")
 
     def test_hook_install_replace_failure_preserves_original(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -460,9 +464,10 @@ class TestGlobalCli(unittest.TestCase):
             with mock.patch.dict(
                 os.environ, {"AGENT_DELEGATION_AGY_CONFIG_ROOT": str(root)}, clear=False
             ):
-                with mock.patch.object(cli.os, "replace", side_effect=OSError("replace failed")):
-                    with self.assertRaises(OSError):
-                        cli._install_agy_hook()
+                with mock.patch.object(cli, "_agy_config_root", return_value=root):
+                    with mock.patch.object(cli.os, "replace", side_effect=OSError("replace failed")):
+                        with self.assertRaises(OSError):
+                            cli._install_agy_hook()
             self.assertEqual(hooks.read_text(encoding="utf-8"), original)
             self.assertEqual(list(root.glob("hooks.json.tmp-*")), [])
 
@@ -477,7 +482,8 @@ class TestGlobalCli(unittest.TestCase):
                 "AGENT_DELEGATION_AGY_CONFIG_ROOT": str(config_root),
             }
             with mock.patch.dict(os.environ, env, clear=True):
-                self.assertEqual(cli.main(["install", "--force"]), 2)
+                with mock.patch.object(cli, "_agy_config_root", return_value=config_root):
+                    self.assertEqual(cli.main(["install", "--force"]), 2)
             self.assertEqual(hooks.read_text(encoding="utf-8"), "[]")
 
     def test_disable_and_enable_use_local_git_config(self):
@@ -666,13 +672,16 @@ class TestBackendSafety(unittest.TestCase):
         )
 
     def test_agy_launch_fails_before_process_without_managed_config(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch.object(runner.subprocess, "run") as launch:
-                with self.assertRaisesRegex(RuntimeError, "AGENT_DELEGATION_AGY_CONFIG_ROOT"):
-                    runner.run_agy("agy", "model", "prompt", 10)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / ".gemini" / "config"
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with mock.patch.object(runner, "_actual_agy_config_root", return_value=missing):
+                    with mock.patch.object(runner.subprocess, "run") as launch:
+                        with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                            runner.run_agy("agy", "model", "prompt", 10)
         launch.assert_not_called()
 
-    def test_agy_launch_uses_managed_config_argument(self):
+    def test_agy_launch_validates_managed_global_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "agy-config"
             self._write_agy_config(root)
@@ -680,17 +689,24 @@ class TestBackendSafety(unittest.TestCase):
             result = mock.Mock(returncode=0, stdout="ok", stderr="")
             fake_os = types.SimpleNamespace(name="posix", environ=os.environ, path=os.path)
             with mock.patch.dict(os.environ, env, clear=False):
-                with mock.patch.object(runner, "os", fake_os):
-                    with mock.patch.object(runner.subprocess, "run", return_value=result) as launch:
-                        self.assertIs(runner.run_agy("agy", "model", "prompt", 10), result)
+                with mock.patch.object(runner, "_actual_agy_config_root", return_value=root.resolve()):
+                    with mock.patch.object(runner, "os", fake_os):
+                        with mock.patch.object(runner.subprocess, "run", return_value=result) as launch:
+                            self.assertIs(runner.run_agy("agy", "model", "prompt", 10), result)
             argv = launch.call_args.args[0]
-            self.assertEqual(argv[1:3], ["--config-dir", str(root.resolve())])
+            self.assertNotIn("--config-dir", argv)
 
             with mock.patch.dict(os.environ, env, clear=False):
-                self.assertEqual(
-                    gemini_delegate.managed_agy_config_args(),
-                    ["--config-dir", str(root.resolve())],
-                )
+                with mock.patch.object(
+                    gemini_delegate, "_actual_agy_config_root", return_value=root.resolve()
+                ):
+                    self.assertEqual(gemini_delegate.managed_agy_config_args(), [])
+
+    def test_agy_launch_rejects_nondefault_config_override(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(os.environ, {runner.AGY_CONFIG_ENV: tmpdir}, clear=False):
+                with self.assertRaisesRegex(RuntimeError, "cannot override"):
+                    runner.managed_agy_config_args()
 
     def test_agy_launch_rejects_missing_or_wrong_guard_handler(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -722,8 +738,11 @@ class TestBackendSafety(unittest.TestCase):
                 with mock.patch.dict(
                     os.environ, {runner.AGY_CONFIG_ENV: str(root)}, clear=False
                 ):
-                    with self.assertRaises(RuntimeError):
-                        runner.managed_agy_config_args()
+                    with mock.patch.object(
+                        runner, "_actual_agy_config_root", return_value=root.resolve()
+                    ):
+                        with self.assertRaises(RuntimeError):
+                            runner.managed_agy_config_args()
 
     def test_gemini_cli_prompt_is_never_passed_to_a_shell(self):
         prompt = "inspect & whoami"

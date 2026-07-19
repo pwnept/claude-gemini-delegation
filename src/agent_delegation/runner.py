@@ -323,12 +323,18 @@ def resolve_agy_command() -> str:
     return shutil.which("agy") or "agy"
 
 
+def _actual_agy_config_root() -> Path:
+    return (Path.home() / ".gemini" / "config").resolve()
+
+
 def managed_agy_config_args() -> list[str]:
-    """Return the isolated agy config arguments or fail before launch."""
+    """Validate the managed global agy command gate before launch."""
     raw = os.environ.get(AGY_CONFIG_ENV, "").strip()
-    if not raw:
-        raise RuntimeError(f"{AGY_CONFIG_ENV} is required for delegated agy launches")
-    root = Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+    root = _actual_agy_config_root()
+    if raw:
+        requested = Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+        if requested != root:
+            raise RuntimeError(f"{AGY_CONFIG_ENV} cannot override agy's actual config root: {root}")
     hooks_path = root / "hooks.json"
     config_path = root / "config.json"
     try:
@@ -363,7 +369,7 @@ def managed_agy_config_args() -> list[str]:
         raise RuntimeError(f"Delegated agy command guard does not match the trusted runtime in {hooks_path}")
     if not isinstance(allowed, list) or "command(*)" not in allowed:
         raise RuntimeError(f"Delegated agy headless permission is missing in {config_path}")
-    return ["--config-dir", str(root)]
+    return []
 
 
 def resolve_backend(args: argparse.Namespace) -> str:

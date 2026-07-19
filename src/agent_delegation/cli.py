@@ -123,10 +123,15 @@ def _agy_root() -> Path:
 
 
 def _agy_config_root() -> Path:
+    actual = (Path.home() / ".gemini" / "config").resolve()
     configured = os.environ.get(AGY_CONFIG_ENV)
     if configured:
-        return Path(os.path.expandvars(os.path.expanduser(configured))).resolve()
-    return global_home() / "agy-config"
+        requested = Path(os.path.expandvars(os.path.expanduser(configured))).resolve()
+        if requested != actual:
+            raise CliError(
+                f"{AGY_CONFIG_ENV} cannot override agy's actual config root: {actual}"
+            )
+    return actual
 
 
 def _guard_argv() -> list[str]:
@@ -193,11 +198,11 @@ def _install_agy_hook() -> Path:
 
 
 def _install_agy_settings() -> Path:
-    """Create settings used only by delegated agy processes.
+    """Create agy settings that route command decisions through the guard.
 
-    Print mode cannot answer permission prompts. The broad command grant only
-    admits calls to the PreToolUse stage. The colocated command guard remains
-    authoritative and allows commands from the active delegated capability set.
+    Print mode cannot answer permission prompts. The broad command grant admits
+    calls to PreToolUse, where the guard allows bounded delegation commands and
+    forces interactive confirmation for normal agy sessions.
     """
     root = _agy_config_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -229,6 +234,15 @@ def _install_agy_settings() -> Path:
     delegation_settings["guardCommand"] = subprocess.list2cmdline(_guard_argv())
     content = json.dumps(document, indent=2) + "\n"
     temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    if path.exists():
+        backup = path.with_name(f"{path.name}.backup-{time.strftime('%Y%m%d-%H%M%S')}")
+        suffix = 1
+        while backup.exists():
+            backup = path.with_name(
+                f"{path.name}.backup-{time.strftime('%Y%m%d-%H%M%S')}-{suffix}"
+            )
+            suffix += 1
+        shutil.copy2(path, backup)
     try:
         with temporary.open("x", encoding="utf-8", newline="\n") as handle:
             handle.write(content)

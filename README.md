@@ -33,9 +33,9 @@ agent-delegation status
 The managed home is `~/.agent-delegation/`. User extensions belong in
 `~/.agent-delegation/policy.local.json`; setup refreshes `policy.json` without
 overwriting the local file. This global managed installation is the default.
-The delegated agy configuration is isolated under
-`~/.agent-delegation/agy-config/`, so its headless permission setup does not
-weaken normal agy sessions.
+The global agy hook allows only the active delegated capability set at depth 1.
+For normal agy sessions it forces interactive confirmation instead of applying
+the headless delegation grant.
 
 The agy print backend remains disabled until its permission hook passes a
 reviewed live smoke that allows `rg` and denies `Get-Date`. `gemini-cli` and
